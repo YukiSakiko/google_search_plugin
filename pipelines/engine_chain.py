@@ -10,6 +10,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Optional
 
 from ..search_engines.bing import BingEngine
+from ..search_engines.bocha import BochaEngine
 from ..search_engines.duckduckgo import DuckDuckGoEngine
 from ..search_engines.google import GoogleEngine
 from ..search_engines.sogou import SogouEngine
@@ -72,6 +73,16 @@ def _build_engine_dict(
                 "turbo": engines.tavily_turbo,
             }
         )
+    elif engine_name == "bocha":
+        cfg.update(
+            {
+                "enabled": engines.bocha_enabled,
+                "api_keys": list(engines.bocha_api_keys),
+                "api_key": engines.bocha_api_key,
+                "freshness": engines.bocha_freshness,
+                "summary": engines.bocha_summary,
+            }
+        )
     elif engine_name == "you":
         cfg.update(
             {
@@ -124,6 +135,7 @@ class EngineChain:
         self.sogou = SogouEngine(_build_engine_dict("sogou", engines, common))
         self.duckduckgo = DuckDuckGoEngine(_build_engine_dict("duckduckgo", engines, common))
         self.tavily = TavilyEngine(_build_engine_dict("tavily", engines, common))
+        self.bocha = BochaEngine(_build_engine_dict("bocha", engines, common))
         self.you = YouSearchEngine(_build_engine_dict("you", engines, common))
         self.you_news = YouLiveNewsEngine(_build_engine_dict("you_news", engines, common))
         self.you_contents = YouContentsClient(_build_engine_dict("you_contents", engines, contents_common))
@@ -151,9 +163,10 @@ class EngineChain:
         engines_cfg = self._engines_cfg
         default_engine = self._backend_cfg.default_engine
 
-        # 引擎优先级:tavily / you 系列优先(质量较高的 API 引擎),其余兜底
+        # 引擎优先级:tavily / bocha / you 系列优先(质量较高的 API 引擎),其余兜底
         all_engines: list[tuple[str, Any]] = [
             ("tavily", self.tavily),
+            ("bocha", self.bocha),
             ("you", self.you),
             ("you_news", self.you_news),
             ("google", self.google),
@@ -174,7 +187,7 @@ class EngineChain:
                 continue
 
             # 需 API key 的引擎,无 key 直接跳过
-            if engine_name in {"tavily", "you", "you_news"} and hasattr(engine, "has_api_keys"):
+            if engine_name in {"tavily", "bocha", "you", "you_news"} and hasattr(engine, "has_api_keys"):
                 if not engine.has_api_keys():
                     logger.info("%s 未配置 API key,跳过", engine_name)
                     continue

@@ -21,8 +21,8 @@ class PluginSection(PluginConfigBase):
     __ui_order__ = 0
 
     name: str = Field(default="google_search", description="插件名称")
-    version: str = Field(default="4.0.0", description="插件版本")
-    config_version: str = Field(default="4.0.0", description="配置版本(Runner 用于兼容性校验)")
+    version: str = Field(default="4.0.1", description="插件版本")
+    config_version: str = Field(default="4.0.1", description="配置版本(Runner 用于兼容性校验)")
     enabled: bool = Field(default=True, description="是否启用插件")
 
 
@@ -78,7 +78,7 @@ class SearchBackendSection(PluginConfigBase):
     __ui_icon__ = "globe"
     __ui_order__ = 3
 
-    default_engine: Literal["google", "bing", "sogou", "duckduckgo", "tavily", "you", "you_news"] = Field(
+    default_engine: Literal["google", "bing", "sogou", "duckduckgo", "tavily", "bocha", "you", "you_news"] = Field(
         default="bing",
         description="默认搜索引擎",
     )
@@ -159,6 +159,16 @@ class EnginesSection(PluginConfigBase):
         ),
     )
     tavily_turbo: bool = Field(default=False, description="是否启用 Tavily Turbo 模式")
+
+    # Bocha
+    bocha_enabled: bool = Field(default=False, description="是否启用博查 Web Search")
+    bocha_api_keys: list[str] = Field(
+        default_factory=list,
+        description="博查 API key 列表,填写多个时随机选用",
+    )
+    bocha_api_key: str = Field(default="", description="博查 API key;留空则使用环境变量 BOCHA_API_KEY")
+    bocha_freshness: str = Field(default="", description="博查 freshness 参数;留空表示不限制时间")
+    bocha_summary: bool = Field(default=True, description="是否请求博查返回 summary 摘要")
 
     # You
     you_enabled: bool = Field(default=False, description="是否启用 You Search")

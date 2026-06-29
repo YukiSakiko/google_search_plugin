@@ -460,6 +460,8 @@ class GoogleSearchPlugin(MaiBotPlugin):
             enabled_engines.append("duckduckgo")
         if e.tavily_enabled:
             enabled_engines.append("tavily")
+        if e.bocha_enabled:
+            enabled_engines.append("bocha")
         if e.you_enabled:
             enabled_engines.append("you")
         if e.you_news_enabled:

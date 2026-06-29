@@ -2,12 +2,13 @@
 
 这是一个搜索插件，还有缩写翻译，还有图片搜索
 
-> **v4.0.0 升级提示**：配置文件结构有调整，v3.x 用户请按本 README **🆙 v3.x → v4 升级**一节修改 `config.toml` 后再启用。
+> **v4.0.1 升级提示**：新增博查 Web Search 后端，默认关闭。需要使用时请配置 `bocha_api_key` 或环境变量 `BOCHA_API_KEY`，并启用 `bocha_enabled`。
 
 ## 已更新[tavily](https://app.tavily.com)以及[You](https://you.com/platform)搜索引擎，很好用:)
 tavily搜索引擎可以前往[官网](https://app.tavily.com)注册后获得密钥
 
 You搜索引擎需要在[官网](https://you.com/platform) 获取 API Key；Live News / Images 为 early access，需账号权限）
+博查搜索引擎需要在[博查开放平台](https://open.bochaai.com/)获取 API Key，适合中文网络搜索场景。
 ## 以上二者均可以使用作者自建的免费注册临时[邮箱1](https://xiaowan258.me)或[邮箱2](https://mail.xiaowan.me)注册
 
 <img width="735" height="308" alt="image" src="https://github.com/user-attachments/assets/9bc86124-b3a8-43e0-addb-1884133658c2" />
@@ -26,12 +27,12 @@ pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 
 ## 🆙 v3.x → v4 升级
 
-如果你是从 v3.x 升级到 v4.0.0，请手动调整你的 `config.toml`（配置文件 gitignored，升级时不会被覆盖），主要有三处变化：
+如果你是从 v3.x 升级到当前版本，请手动调整你的 `config.toml`（配置文件 gitignored，升级时不会被覆盖），主要有三处变化：
 
 1. **section 重命名**：`[model_config]` → `[models]`（其中字段名不变，只是 section 名变更）
 2. **新增 section**：`[translation]`（缩写翻译相关参数，不写也行，会用默认值）
 3. **删除 section**：`[storage]` 整段可以删除（搜索结果现在由麦麦内部统一记录到 `tool_records`，不再由插件自己写库）
-4. **`[plugin]` 段新增 `config_version = "4.0.0"`**（必填，麦麦校验配置版本时会用）
+4. **`[plugin]` 段新增 `config_version = "4.0.1"`**（必填，麦麦校验配置版本时会用）
 
 升级最快的做法：直接删掉旧 `config.toml`，让插件首次启动时自动重新生成 v4 默认配置；再把你原来的 API key / 代理 等设置项搬过去即可。
 
@@ -39,7 +40,7 @@ pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 
 1.  **接收问题**: 插件接收到用户的原始问题。
 2.  **查询重写**: 插件内部的LLM结合聊天上下文，将原始问题重写为一个或多个精确的搜索关键词。
-3.  **后端搜索**: 使用重写后的关键词，调用Google、Bing、Tavily 等搜索引擎执行搜索（多引擎自动降级）。
+3.  **后端搜索**: 使用重写后的关键词，调用Google、Bing、Tavily、博查等搜索引擎执行搜索（多引擎自动降级）。
 4.  **内容抓取**: (可选) 抓取搜索结果网页的主要内容（trafilatura/readability/bs4 三级降级；知乎链接走专用抓取）。
 5.  **阅读总结**: 内部LLM阅读所有搜索到的材料。
 6.  **生成答案**: LLM根据阅读的材料，生成最终的总结性答案并返回。
@@ -53,7 +54,7 @@ pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 ### `[plugin]`
 - `name` (str): 插件名称，保持默认即可。
 - `version` (str): 插件版本，保持默认即可。
-- `config_version` (str): 配置版本号，**必填**，当前 `4.0.0`。麦麦在加载插件时会校验该字段。
+- `config_version` (str): 配置版本号，**必填**，当前 `4.0.1`。麦麦在加载插件时会校验该字段。
 - `enabled` (bool): 是否启用插件。
 
 ### `[models]`
@@ -71,7 +72,7 @@ pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 ### `[search_backend]`
 这里配置供模型调用的“后端”搜索引擎的行为。
 
-- `default_engine` (str, 下拉 choices): 默认使用的搜索引擎 (`google`, `bing`, `sogou`, `duckduckgo`, `tavily`, `you`, `you_news`)。
+- `default_engine` (str, 下拉 choices): 默认使用的搜索引擎 (`google`, `bing`, `sogou`, `duckduckgo`, `tavily`, `bocha`, `you`, `you_news`)。
 - `max_results` (int): 每次搜索返回给模型阅读的结果数量。
 - `timeout` (int): 后端搜索引擎的超时时间。
 - `proxy` (str): 用于后端搜索的HTTP/HTTPS代理地址，例如 'http://127.0.0.1:7890'。默认为空字符串，表示不使用代理。
@@ -101,6 +102,10 @@ pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 - `tavily_include_raw_content` (bool): 是否返回网页正文片段。
 - `tavily_topic` (str): Tavily 主题参数，如 `general` 或 `news`。**v4 起默认留空**——Tavily 的 news 索引偏向英文国际体育/政治资讯，对中文电竞/娱乐/社交等场景准确率反而下降，因此不再让插件 LLM 自动判断。如有需要可由工具调用方在调用时显式传入 `tavily_topic` 参数覆写。
 - `tavily_turbo` (bool): Tavily Turbo 模式。
+- `bocha_enabled` (bool): 是否启用博查 Web Search（需 API key）。
+- `bocha_api_keys` (list[str]) / `bocha_api_key` (str): 博查 key 列表或单个（也可用环境变量 `BOCHA_API_KEY`）。
+- `bocha_freshness` (str): 博查 freshness 参数；留空表示不限时间。
+- `bocha_summary` (bool): 是否请求博查返回 summary 摘要。
 - `you_enabled` (bool): 是否启用 You Search。
 - `you_news_enabled` (bool): 是否启用 You Live News（early access）。
 - `you_api_keys` (list[str]) / `you_api_key` (str): You API key 列表或单个（也可用环境变量 `YOU_API_KEY`）。
