@@ -37,12 +37,11 @@ pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 
 ## 工作流程
 
-1.  **接收问题**: 插件接收到用户的原始问题。
-2.  **查询重写**: 插件内部的LLM结合聊天上下文，将原始问题重写为一个或多个精确的搜索关键词。
-3.  **后端搜索**: 使用重写后的关键词，调用Google、Bing、Tavily 等搜索引擎执行搜索（多引擎自动降级）。
-4.  **内容抓取**: (可选) 抓取搜索结果网页的主要内容（trafilatura/readability/bs4 三级降级；知乎链接走专用抓取）。
-5.  **阅读总结**: 内部LLM阅读所有搜索到的材料。
-6.  **生成答案**: LLM根据阅读的材料，生成最终的总结性答案并返回。
+1.  **接收搜索词**: planner 调用 `web_search` 时直接传入搜索关键词（或 URL），插件不再做 LLM 查询重写。
+2.  **后端搜索**: 使用该关键词，调用Google、Bing、Tavily 等搜索引擎执行搜索（多引擎自动降级）。
+3.  **内容抓取**: (可选) 抓取搜索结果网页的主要内容（trafilatura/readability/bs4 三级降级；知乎链接走专用抓取）。
+4.  **阅读总结**: 内部LLM阅读所有搜索到的材料。
+5.  **生成答案**: LLM根据阅读的材料，生成最终的总结性答案并返回。
 
 ## 🔧 配置说明
 
@@ -62,11 +61,9 @@ pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 - `model_name` (str, 下拉 choices): 指定用于搜索/总结的模型 task。可选：
   `replyer`, `utils`, `tool_use`, `planner`, `vlm`, `lpmm_entity_extract`, `lpmm_rdf_build`, `lpmm_qa`。默认 `replyer`。
 - `temperature` (float): 单独设置本次搜索时模型的温度。默认为 0.7。
-- `context_time_gap` (int): 获取最近多少秒的**全局**聊天记录作为上下文。默认 300。
-- `context_max_limit` (int): 最多获取多少条**全局**聊天记录作为上下文。默认 15。
 
 ### `[actions]`
-- `image_search_enabled` (bool, 默认 false): 是否启用图片搜索动作。开启后，麦麦在对话中识别到“给我看张 xx 图”之类的请求会自动调用图搜引擎并发图。
+- `image_search_enabled` (bool, 默认 false): 是否启用图片搜索动作。开启后，麦麦在对话中识别到“给我看张 xx 图”之类的请求会自动调用图搜引擎并发图。关闭时该动作不会暴露给决策模型。
 
 ### `[search_backend]`
 这里配置供模型调用的“后端”搜索引擎的行为。

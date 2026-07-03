@@ -3,9 +3,9 @@
 业务逻辑全部抽到 ``pipelines/`` 子模块,本文件只负责装配 + 派发。
 
 提供三个面向 LLM 的组件:
-- ``@Tool("web_search")``             主搜索工具(支持 URL 直访)
+- ``@Tool("web_search")``             主搜索工具(支持 URL 直访;搜索词由 planner 直接给出)
 - ``@Tool("abbreviation_translate")`` 缩写翻译(神奇海螺 nbnhhsh;关闭时置为禁用态,不暴露给 planner)
-- ``@Action("image_search")``         图片搜索(handler 内按配置短路)
+- ``@Action("image_search")``         图片搜索(关闭时置为禁用态,不暴露给 planner)
 
 外加一个 ``/google_search_status`` 诊断命令。
 """
@@ -26,8 +26,9 @@ from .pipelines.llm_runner import LLMRunner
 from .pipelines.search_pipeline import SearchPipeline
 from .pipelines.url_pipeline import UrlPipeline, is_url
 from .pipelines.zhihu_extractor import ZhihuExtractor
-from .tools.rewrite_output import ALLOWED_TAVILY_TOPICS
 from .translators.nbnhhsh import NbnhhshTranslator
+
+ALLOWED_TAVILY_TOPICS = frozenset({"general", "news"})
 
 
 class GoogleSearchPlugin(MaiBotPlugin):
@@ -87,49 +88,60 @@ class GoogleSearchPlugin(MaiBotPlugin):
             self._build_pipelines()
         except Exception as exc:  # noqa: BLE001
             self.ctx.logger.error("重建 pipelines 失败: %s", exc, exc_info=True)
-        await self._sync_translation_tool_state()
+        await self._sync_component_states()
+
+    def _configured_component_states(self) -> dict[str, tuple[str, bool]]:
+        """按当前配置给出可开关组件的期望状态: name -> (component_type, enabled)。"""
+        cfg = self.config
+        return {
+            "abbreviation_translate": ("tool", bool(cfg.translation.enabled)),
+            "image_search": ("action", bool(cfg.actions.image_search_enabled)),
+        }
 
     def get_components(self) -> list[dict[str, Any]]:
-        """收集组件声明,并按配置写入 abbreviation_translate 的初始启用态。
+        """收集组件声明,并按配置写入可开关组件的初始启用态。
 
-        关闭缩写翻译时不能直接从声明中剔除该工具:组件不进注册表的话,
+        关闭功能时不能直接从声明中剔除对应组件:组件不进注册表的话,
         运行时热启用会因"未找到组件"失败,只能重载插件恢复。
-        因此保持注册、仅置为禁用态,使其不暴露给 planner 的 tool_search。
+        因此保持注册、仅置为禁用态,使其不暴露给 planner。
         """
         components = super().get_components()
         try:
-            translation_enabled = bool(self.config.translation.enabled)
+            states = self._configured_component_states()
         except Exception:  # noqa: BLE001
-            translation_enabled = True
+            states = {}
         for comp in components:
-            if comp.get("name") == "abbreviation_translate":
-                metadata = comp.get("metadata")
-                if isinstance(metadata, dict):
-                    metadata["enabled"] = translation_enabled
+            state = states.get(comp.get("name", ""))
+            if state is None:
+                continue
+            metadata = comp.get("metadata")
+            if isinstance(metadata, dict):
+                metadata["enabled"] = state[1]
         return components
 
-    async def _sync_translation_tool_state(self) -> None:
-        """按当前配置热切换 abbreviation_translate 工具的启用状态。
+    async def _sync_component_states(self) -> None:
+        """按当前配置热切换可开关组件的启用状态。
 
         宿主侧 enable/disable 仅翻转内存态,重启后以注册元数据
         (见 ``get_components``)为准,两者互补无需持久化。
         """
-        enabled = bool(self.config.translation.enabled)
-        try:
-            if enabled:
-                result = await self.ctx.component.enable_component("abbreviation_translate", "tool")
+        for name, (component_type, enabled) in self._configured_component_states().items():
+            try:
+                if enabled:
+                    result = await self.ctx.component.enable_component(name, component_type)
+                else:
+                    result = await self.ctx.component.disable_component(name, component_type)
+            except Exception as exc:  # noqa: BLE001
+                self.ctx.logger.warning("切换 %s 启用状态失败: %s", name, exc)
+                continue
+            if isinstance(result, dict) and not result.get("success", False):
+                self.ctx.logger.warning(
+                    "切换 %s 启用状态被拒绝: %s",
+                    name,
+                    result.get("error", "未知原因"),
+                )
             else:
-                result = await self.ctx.component.disable_component("abbreviation_translate", "tool")
-        except Exception as exc:  # noqa: BLE001
-            self.ctx.logger.warning("切换 abbreviation_translate 启用状态失败: %s", exc)
-            return
-        if isinstance(result, dict) and not result.get("success", False):
-            self.ctx.logger.warning(
-                "切换 abbreviation_translate 启用状态被拒绝: %s",
-                result.get("error", "未知原因"),
-            )
-        else:
-            self.ctx.logger.info("abbreviation_translate 工具已%s", "启用" if enabled else "禁用")
+                self.ctx.logger.info("%s 组件已%s", name, "启用" if enabled else "禁用")
 
     def _build_pipelines(self) -> None:
         """从 self.config 装配所有运行时组件。"""
@@ -149,8 +161,6 @@ class GoogleSearchPlugin(MaiBotPlugin):
         )
         self._llm_runner = LLMRunner(self.ctx, cfg.models)
         self._search_pipeline = SearchPipeline(
-            self.ctx,
-            models_cfg=cfg.models,
             backend_cfg=cfg.search_backend,
             engine_chain=self._engine_chain,
             content_fetcher=self._content_fetcher,
@@ -216,7 +226,7 @@ class GoogleSearchPlugin(MaiBotPlugin):
             ToolParameterInfo(
                 name="question",
                 param_type=ToolParamType.STRING,
-                description="需要搜索的消息",
+                description="用于搜索引擎的搜索关键词或完整问题(将被原样送入搜索引擎),也可直接传入 URL 获取网页内容",
                 required=True,
             ),
             ToolParameterInfo(
@@ -234,7 +244,6 @@ class GoogleSearchPlugin(MaiBotPlugin):
         self,
         question: str = "",
         tavily_topic: str = "",
-        stream_id: str = "",
         **kwargs: Any,
     ) -> dict[str, str]:
         """主搜索入口。"""
@@ -268,10 +277,9 @@ class GoogleSearchPlugin(MaiBotPlugin):
                     bot_name=bot_name,
                 )
             else:
-                self.ctx.logger.info("开始执行搜索,原始问题: %s", question)
+                self.ctx.logger.info("开始执行搜索: %s", question)
                 content = await self._search_pipeline.run(  # type: ignore[union-attr]
                     question,
-                    chat_id=stream_id,
                     bot_name=bot_name,
                     tavily_topic_override=topic_override,
                 )
@@ -360,7 +368,6 @@ class GoogleSearchPlugin(MaiBotPlugin):
             "适用于'搜/找/来一张/发一张xx的图片'等指令。",
             "如果用户只是在普通聊天中提到了某个事物，不代表他想要图片，此时不应使用。",
             "一次只随机发送一张图片，30 分钟内不重复发送同一图片。",
-            "若插件配置中未启用图片搜索功能，本动作会拒绝执行,请勿调用。",
         ],
         associated_types=["image"],
         parallel_action=False,
@@ -371,15 +378,10 @@ class GoogleSearchPlugin(MaiBotPlugin):
         stream_id: str = "",
         **kwargs: Any,
     ) -> tuple[bool, str]:
-        """图片搜索入口。未启用时不做条件注册,而是 handler 内短路。"""
+        """图片搜索入口。未启用时组件处于禁用态不暴露;此处短路仅防配置热更竞态。"""
         del kwargs
 
         if not self.config.actions.image_search_enabled:
-            if stream_id:
-                await self.ctx.send.text(
-                    "图片搜索功能当前未启用。如需使用，请在配置文件中启用此功能。",
-                    stream_id,
-                )
             return False, "图片搜索功能未启用"
 
         query = (query or "").strip()

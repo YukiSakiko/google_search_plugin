@@ -1,4 +1,3 @@
-mi-googlesearch-python>=1.3.0
 aiohttp>=3.8.0
 beautifulsoup4>=4.11.0
 curl_cffi>=0.7.0
