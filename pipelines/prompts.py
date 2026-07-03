@@ -25,41 +25,10 @@ def _identity_header(bot_name: str) -> str:
     return f"你的名字是{name}。现在是{time_now}。"
 
 
-def build_rewrite_prompt(*, bot_name: str, question: str, context: str) -> str:
-    """构建查询重写 prompt(rewrite + 是否需要搜索判断)"""
-    return textwrap.dedent(
-        f"""
-        {_identity_header(bot_name)}
-        [任务]
-        你是一个专业的搜索查询分析师。你的任务是根据用户当前的提问和最近的聊天记录，生成一个最适合在搜索引擎中使用的高效、精确的关键词。
-
-        [聊天记录]
-        {context}
-
-        [用户当前提问]
-        {question}
-
-        [要求]
-        1.  分析聊天记录和当前提问，理解用户的真实意图。
-        2.  如果当前提问已经足够清晰，直接使用它或稍作优化。
-        3.  如果提问模糊（如使用了"它"、"那个"等代词），请从聊天记录中找出指代对象，并构成一个完整的查询。
-        4.  如果分析后认为用户的问题不需要联网搜索就能回答（例如，只是简单的打招呼），请直接输出"无需搜索"。
-        5.  输出的关键词应该简洁、明确，适合搜索引擎。
-        6.  保留中文人名/作品名/专有名词的中文形式，不要翻译成英文。
-
-        [输出]
-        - 如果无需搜索：请只输出 `无需搜索`。
-        - 否则：请只输出 JSON（不要输出解释），格式如下：
-          {{"query": "<搜索关键词>"}}
-        """
-    ).strip()
-
-
 def build_summarize_prompt(
     *,
     bot_name: str,
-    original_question: str,
-    search_query: str,
+    question: str,
     formatted_results: str,
 ) -> str:
     """构建搜索结果总结 prompt"""
@@ -67,19 +36,16 @@ def build_summarize_prompt(
         f"""
         {_identity_header(bot_name)}
         [任务]
-        你是一个专业的网络信息整合专家。你的任务是根据用户原始问题和一系列从互联网上搜索到的资料，给出一个全面、准确、简洁的回答。
+        你是一个专业的网络信息整合专家。你的任务是根据搜索问题和一系列从互联网上搜索到的资料，给出一个全面、准确、简洁的回答。
 
-        [用户原始问题]
-        {original_question}
-
-        [你用于搜索的关键词]
-        {search_query}
+        [搜索问题]
+        {question}
 
         [搜索到的资料]
         {formatted_results}
 
         [要求]
-        1.  仔细阅读所有资料，并围绕用户的原始问题进行回答。
+        1.  仔细阅读所有资料，并围绕搜索问题进行回答。
         2.  答案应该自然流畅，像是你自己总结的，而不是简单的资料拼接。
         3.  如果资料中有相互矛盾的信息，请客观地指出来。
         4.  如果资料不足以回答问题，请诚实地说明。
