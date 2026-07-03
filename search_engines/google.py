@@ -68,6 +68,10 @@ class GoogleEngine(BaseSearchEngine):
 
     def _lr(self) -> str:
         """限定结果语言, e.g. lang_zh-CN / lang_en。"""
+        if self.language in {"zh-cn", "zh-hans"}:
+            return "lang_zh-CN"
+        if self.language in {"zh-tw", "zh-hk", "zh-hant"}:
+            return "lang_zh-TW"
         primary = self.language.split("-", 1)[0].strip().lower()
         return f"lang_{primary}" if primary else ""
 
