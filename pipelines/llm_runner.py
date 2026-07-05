@@ -74,8 +74,11 @@ class LLMRunner:
                     prompt=prompt,
                     model=target_model,            # 必须显式传,空字符串会被 host 回退到 embedding
                     temperature=temperature,
+                    # 必须显式传给 RPC 层:不传时 Runner 默认 30s 超时,
+                    # 外层 wait_for 的配置超时根本轮不到生效(曾致 summarize 30s 必炸)
+                    timeout_ms=timeout * 1000,
                 ),
-                timeout=timeout,
+                timeout=timeout + 5,  # 外层只做兜底,略宽于 RPC 超时避免抢跑
             )
         except asyncio.TimeoutError as exc:
             logger.error("ctx.llm.generate 超时(%ds, model=%s)", timeout, target_model)
