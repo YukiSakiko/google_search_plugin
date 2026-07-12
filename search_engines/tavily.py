@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import aiohttp
 
@@ -16,8 +16,8 @@ class TavilyEngine(BaseSearchEngine, ApiKeyMixin):
     SEARCH_ENDPOINT = "/search"
 
     search_depth: str
-    include_raw_content: bool
-    include_answer: bool
+    include_raw_content: Literal[False, True, "markdown", "text"]
+    include_answer: Literal[False, True, "basic", "advanced"]
     topic: Optional[str]
     turbo: bool
 
