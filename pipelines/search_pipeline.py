@@ -73,7 +73,11 @@ class SearchPipeline:
             results = await self._fetcher.fetch_batch(results, last_success_engine=last_engine)
 
         # ---- 3. summarize prompt ---- #
-        formatted = format_results_for_prompt(results)
+        formatted = format_results_for_prompt(
+            results,
+            source_max_chars=self._backend.summary_source_max_chars,
+            total_max_chars=self._backend.summary_total_max_chars,
+        )
         summarize_prompt = build_summarize_prompt(
             bot_name=bot_name,
             question=question,

@@ -146,8 +146,14 @@ class EnginesSection(PluginConfigBase):
     )
     tavily_api_key: str = Field(default="", description="Tavily API key;留空则使用环境变量 TAVILY_API_KEY")
     tavily_search_depth: Literal["basic", "advanced"] = Field(default="basic", description="搜索深度")
-    tavily_include_raw_content: bool = Field(default=False, description="是否返回网页原始内容")
-    tavily_include_answer: bool = Field(default=True, description="是否返回 Tavily 生成的答案")
+    tavily_include_raw_content: Literal[False, True, "markdown", "text"] = Field(
+        default=False,
+        description="是否返回网页正文；markdown 保留 Markdown 结构，text 返回纯文本。",
+    )
+    tavily_include_answer: Literal[False, True, "basic", "advanced"] = Field(
+        default="basic",
+        description="是否返回 Tavily 聚合答案；advanced 返回更详细的答案。",
+    )
     tavily_topic: str = Field(
         default="",
         description=(
@@ -157,6 +163,19 @@ class EnginesSection(PluginConfigBase):
         ),
     )
     tavily_turbo: bool = Field(default=False, description="是否启用 Tavily Turbo 模式")
+
+    summary_source_max_chars: int = Field(
+        default=1600,
+        ge=200,
+        le=10000,
+        description="搜索总结中每个来源最多保留的字符数，避免正文过长。",
+    )
+    summary_total_max_chars: int = Field(
+        default=12000,
+        ge=1000,
+        le=50000,
+        description="搜索总结中全部来源最多保留的字符数。",
+    )
 
     # You
     you_enabled: bool = Field(default=False, description="是否启用 You Search")
