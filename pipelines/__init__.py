@@ -4,7 +4,7 @@ plugin.py 只放装饰器与装配,业务逻辑都在这里。
 
 模块职责:
 - prompts:        summarize / url_summarize prompt 模板
-- llm_runner:     ctx.llm.generate 包装,显式传 model 参数
+- llm_runner:     ctx.llm.generate 包装,显式传 task_name 参数
 - engine_chain:   多引擎 fallback 链
 - content_fetcher: 网页正文抓取(trafilatura/readability/bs4 三级降级)
 - zhihu_extractor: 知乎专用抓取与 initialState 解析

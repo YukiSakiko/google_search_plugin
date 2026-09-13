@@ -1,8 +1,8 @@
 """LLM 调用包装。
 
 设计要点:
-- 必须显式传 ``model=`` 参数,否则 host 端 ``resolve_task_name("")``
-  会按字母序回退到 ``embedding`` task,导致 chat completion 失败。
+- 必须通过 ``task_name=`` 传递配置中的任务名,保留该任务的模型选择策略。
+  SDK 的 ``model`` / ``model_name`` 参数仅用于指定具体模型。
 - 区分"调用失败"(异常 / success=False / 超时)与"模型返空响应":
   前者抛 :class:`LLMCallError`,调用方据此给出"服务暂不可用"文案;
   后者返回空字符串,调用方给出"无法确定"文案。
@@ -57,12 +57,12 @@ class LLMRunner:
             logger.warning("prompt 为空,跳过 LLM 调用")
             return ""
 
-        target_model = str(self._config.model_name or "replyer")
+        task_name = self._config.model_name
         temperature = self._config.temperature
         timeout = max(int(self._config.llm_timeout_seconds or 60), 1)
         logger.info(
-            "调用 ctx.llm.generate, model=%s temperature=%s prompt_len=%d timeout=%ds",
-            target_model,
+            "调用 ctx.llm.generate, task_name=%s temperature=%s prompt_len=%d timeout=%ds",
+            task_name,
             temperature,
             len(prompt),
             timeout,
@@ -72,7 +72,7 @@ class LLMRunner:
             result = await asyncio.wait_for(
                 self._ctx.llm.generate(
                     prompt=prompt,
-                    model=target_model,            # 必须显式传,空字符串会被 host 回退到 embedding
+                    task_name=task_name,  # 任务名不能作为具体模型名传入 model
                     temperature=temperature,
                     # 必须显式传给 RPC 层:不传时 Runner 默认 30s 超时,
                     # 外层 wait_for 的配置超时根本轮不到生效(曾致 summarize 30s 必炸)
@@ -81,7 +81,7 @@ class LLMRunner:
                 timeout=timeout + 5,  # 外层只做兜底,略宽于 RPC 超时避免抢跑
             )
         except asyncio.TimeoutError as exc:
-            logger.error("ctx.llm.generate 超时(%ds, model=%s)", timeout, target_model)
+            logger.error("ctx.llm.generate 超时(%ds, task_name=%s)", timeout, task_name)
             raise LLMCallError(f"LLM 调用超时 ({timeout}s)") from exc
         except Exception as exc:
             logger.error("ctx.llm.generate 抛异常: %s", exc, exc_info=True)
@@ -100,26 +100,26 @@ class LLMRunner:
         if not success:
             err = result.get("error") or "<no error key>"
             logger.error(
-                "LLM 调用失败 (model=%s): error=%s | full_result_keys=%s",
-                target_model,
+                "LLM 调用失败 (task_name=%s): error=%s | full_result_keys=%s",
+                task_name,
                 err,
                 sorted(result.keys()),
             )
-            raise LLMCallError(f"LLM 调用失败 (model={target_model}): {err}")
+            raise LLMCallError(f"LLM 调用失败 (task_name={task_name}): {err}")
 
         if not response_text:
             # 模型自然返回空 —— 不抛异常,让上层判断这是"无内容"还是"无法判断"
             logger.warning(
-                "LLM 调用 success=True 但 response 为空 (model=%s) full_result_keys=%s",
-                target_model,
+                "LLM 调用 success=True 但 response 为空 (task_name=%s) full_result_keys=%s",
+                task_name,
                 sorted(result.keys()),
             )
             return ""
 
         preview = response_text[:200].replace("\n", "\\n")
         logger.info(
-            "LLM 响应成功 (model=%s) response_len=%d preview=%r",
-            target_model,
+            "LLM 响应成功 (task_name=%s) response_len=%d preview=%r",
+            task_name,
             len(response_text),
             preview,
         )
