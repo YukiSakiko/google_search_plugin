@@ -143,7 +143,6 @@ class EngineChain:
 
         self.last_success_engine: Optional[str] = None
         self.last_tavily_answer: Optional[str] = None
-        self.last_deepseek_answer: Optional[str] = None
 
     async def search_with_fallback(
         self,
@@ -203,9 +202,6 @@ class EngineChain:
                     logger.info("%s 搜索成功,返回 %d 条", engine_name, len(results))
                     self.last_success_engine = engine_name
                     self.last_tavily_answer = getattr(engine, "last_answer", None) if engine_name == "tavily" else None
-                    self.last_deepseek_answer = (
-                        getattr(engine, "last_answer", None) if engine_name == "deepseek" else None
-                    )
                     return results
             except Exception as exc:  # noqa: BLE001
                 logger.warning("%s 搜索失败: %s", engine_name, exc)

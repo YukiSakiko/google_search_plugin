@@ -66,7 +66,7 @@ pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 ### `[search_backend]`
 这里配置供模型调用的“后端”搜索引擎的行为。
 
-- `default_engine` (str, 下拉 choices): 默认使用的搜索引擎 (`google`, `bing`, `sogou`, `duckduckgo`, `tavily`, `you`, `you_news`)。
+- `default_engine` (str, 下拉 choices): 默认使用的搜索引擎 (`google`, `bing`, `sogou`, `duckduckgo`, `tavily`, `you`, `you_news`, `deepseek`)。
 - `max_results` (int): 每次搜索返回给模型阅读的结果数量。
 - `timeout` (int): 后端搜索引擎的超时时间。
 - `proxy` (str): 用于后端搜索的HTTP/HTTPS代理地址，例如 'http://127.0.0.1:7890'。默认为空字符串，表示不使用代理。
@@ -110,6 +110,11 @@ pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 - `you_contents_format` (str): Contents 返回内容格式（html/markdown）。
 - `you_contents_force` (bool): 强制使用 Contents，不受引擎来源限制。
 - `you_images_enabled` (bool): 是否启用 You Images（early access）。
+- `deepseek_enabled` (bool, 默认 false): 是否启用 DeepSeek 官方联网搜索。
+- `deepseek_api_keys` (list[str]) / `deepseek_api_key` (str): DeepSeek API key 列表或单个（也可用环境变量 `DEEPSEEK_API_KEY`）。
+- `deepseek_base_url` (str, 默认 "https://api.deepseek.com"): DeepSeek API 基础地址（支持填入代理或兼容端点，插件会自动适配 `/anthropic/v1/messages`）。
+- `deepseek_model` (str, 默认 "deepseek-chat"): 调用的模型名称。
+- `deepseek_max_tokens` (int, 默认 2048): DeepSeek 服务端生成答案的最大 Token 数。
 
 ### `[translation]`
 缩写翻译工具（基于神奇海螺 nbnhhsh API）。

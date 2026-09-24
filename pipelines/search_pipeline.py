@@ -67,23 +67,26 @@ class SearchPipeline:
 
         # ---- 2. 内容补充与智能直出 (针对自带优质总结的 AI 引擎) ---- #
         last_engine = self._engines.last_success_engine or ""
-        if last_engine == "deepseek" and self._engines.last_deepseek_answer:
+        deepseek_summary_result = next(
+            (r for r in results if r.rank == -1 and r.title == "DeepSeek Summary"), None
+        )
+        if last_engine == "deepseek" and deepseek_summary_result and deepseek_summary_result.content:
             logger.info("DeepSeek 服务端已生成完整解答，直接返回并跳过本地 LLM 二次总结")
-            answer = self._engines.last_deepseek_answer.strip()
-            # 提取真实外部网页引用链接
-            valid_links = [
+            answer = deepseek_summary_result.content.strip()
+            # 提取真实外部网页引用链接 (仅保留 rank >= 0 且协议合法的真实外部网页，杜绝合成条目与内部端点泄漏)
+            external_links = [
                 f"{idx}. [{r.title}]({r.url})"
-                for idx, r in enumerate(results, start=1)
-                if r.title and r.url and not r.url.startswith("https://api.deepseek.com")
+                for idx, r in enumerate(
+                    (r for r in results if r.rank >= 0 and r.url and r.url.startswith(("http://", "https://"))),
+                    start=1,
+                )
             ]
-            if valid_links:
-                answer += "\n\n【参考来源】：\n" + "\n".join(valid_links[:8])
+            if external_links:
+                answer += "\n\n【参考来源】：\n" + "\n".join(external_links[:8])
             return answer
 
         if last_engine == "tavily":
             self._fetcher.integrate_inline_content(results, self._engines.last_tavily_answer, engine_name="Tavily")
-        elif last_engine == "deepseek":
-            self._fetcher.integrate_inline_content(results, self._engines.last_deepseek_answer, engine_name="DeepSeek")
         elif self._backend.fetch_content:
             results = await self._fetcher.fetch_batch(results, last_success_engine=last_engine)
 

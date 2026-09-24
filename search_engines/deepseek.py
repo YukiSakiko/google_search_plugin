@@ -22,7 +22,6 @@ class DeepSeekEngine(BaseSearchEngine, ApiKeyMixin):
     base_url: str
     model: str
     max_tokens: int
-    last_answer: Optional[str]
 
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(config)
@@ -30,7 +29,6 @@ class DeepSeekEngine(BaseSearchEngine, ApiKeyMixin):
         self.base_url = self._resolve_endpoint_url(self.config.get("base_url") or "https://api.deepseek.com")
         self.model = self.config.get("model") or "deepseek-chat"
         self.max_tokens = int(self.config.get("max_tokens") or 2048)
-        self.last_answer = None
 
     @staticmethod
     def _resolve_endpoint_url(base: str) -> str:
@@ -51,7 +49,6 @@ class DeepSeekEngine(BaseSearchEngine, ApiKeyMixin):
             logger.warning("DeepSeek API key 未配置,跳过 DeepSeek 搜索。")
             return []
 
-        self.last_answer = None
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         payload: Dict[str, Any] = {
@@ -135,15 +132,23 @@ class DeepSeekEngine(BaseSearchEngine, ApiKeyMixin):
                             for idx, item in enumerate(raw_items):
                                 if not isinstance(item, dict):
                                     continue
-                                title = self.tidy_text(item.get("title", ""))
-                                url = item.get("url", "")
+                                # 兼容顶层条目或嵌套在 web_search_result 下的结构
+                                entry = (
+                                    item.get("web_search_result")
+                                    if isinstance(item.get("web_search_result"), dict)
+                                    else item
+                                )
+                                title = self.tidy_text(entry.get("title", ""))
+                                url = entry.get("url", "")
                                 if not title or not self._is_valid_url(url):
                                     continue
                                 if url in seen_urls:
                                     continue
                                 seen_urls.add(url)
 
-                                snippet = title
+                                snippet = self.tidy_text(
+                                    entry.get("snippet") or entry.get("content") or title
+                                )
                                 results.append(
                                     SearchResult(
                                         title=title,
@@ -151,25 +156,27 @@ class DeepSeekEngine(BaseSearchEngine, ApiKeyMixin):
                                         snippet=snippet,
                                         abstract=snippet,
                                         rank=idx,
-                                        content="",
+                                        content=snippet,
                                     )
                                 )
 
                 answer = "\n".join(texts).strip()
-                self.last_answer = answer if answer else None
 
-                if not results and self.last_answer:
-                    results.append(
+                # 请求级作用域保存答案（rank=-1，url="" 绝不包含 API 端点，防止泄漏和并发污染）
+                final_results = results[: min(len(results), num_results)]
+                if answer:
+                    final_results.insert(
+                        0,
                         SearchResult(
-                            title="DeepSeek 综合解答",
-                            url=self.base_url,
-                            snippet=self.last_answer[:200],
-                            abstract=self.last_answer,
-                            rank=0,
-                            content=self.last_answer,
-                        )
+                            title="DeepSeek Summary",
+                            url="",
+                            snippet=answer,
+                            abstract=answer,
+                            rank=-1,
+                            content=answer,
+                        ),
                     )
 
-                return results[: min(len(results), num_results)]
+                return final_results
 
         return []
