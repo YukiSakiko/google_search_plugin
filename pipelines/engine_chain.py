@@ -10,6 +10,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Optional
 
 from ..search_engines.bing import BingEngine
+from ..search_engines.deepseek import DeepSeekEngine
 from ..search_engines.duckduckgo import DuckDuckGoEngine
 from ..search_engines.google import GoogleEngine
 from ..search_engines.sogou import SogouEngine
@@ -72,6 +73,17 @@ def _build_engine_dict(
                 "turbo": engines.tavily_turbo,
             }
         )
+    elif engine_name == "deepseek":
+        cfg.update(
+            {
+                "enabled": engines.deepseek_enabled,
+                "api_keys": list(engines.deepseek_api_keys),
+                "api_key": engines.deepseek_api_key,
+                "base_url": engines.deepseek_base_url,
+                "model": engines.deepseek_model,
+                "max_tokens": engines.deepseek_max_tokens,
+            }
+        )
     elif engine_name == "you":
         cfg.update(
             {
@@ -124,6 +136,7 @@ class EngineChain:
         self.sogou = SogouEngine(_build_engine_dict("sogou", engines, common))
         self.duckduckgo = DuckDuckGoEngine(_build_engine_dict("duckduckgo", engines, common))
         self.tavily = TavilyEngine(_build_engine_dict("tavily", engines, common))
+        self.deepseek = DeepSeekEngine(_build_engine_dict("deepseek", engines, common))
         self.you = YouSearchEngine(_build_engine_dict("you", engines, common))
         self.you_news = YouLiveNewsEngine(_build_engine_dict("you_news", engines, common))
         self.you_contents = YouContentsClient(_build_engine_dict("you_contents", engines, contents_common))
@@ -137,7 +150,7 @@ class EngineChain:
         num_results: int,
         *,
         tavily_topic: Optional[str] = None,
-    ) -> "list[SearchResult]":
+    ) -> tuple[list[SearchResult], str]:
         """带降级的搜索。
 
         Args:
@@ -146,13 +159,14 @@ class EngineChain:
             tavily_topic: 可选的 Tavily topic 覆写(general/news)
 
         Returns:
-            搜索结果列表;所有引擎都失败时返回空列表
+            Tuple[list[SearchResult], str]: 搜索结果列表与成功命中的引擎名称;所有引擎都失败时返回 ([], "")
         """
         engines_cfg = self._engines_cfg
         default_engine = self._backend_cfg.default_engine
 
-        # 引擎优先级:tavily / you 系列优先(质量较高的 API 引擎),其余兜底
+        # 引擎优先级:deepseek / tavily / you 系列优先(质量较高的 API 引擎),其余兜底
         all_engines: list[tuple[str, Any]] = [
+            ("deepseek", self.deepseek),
             ("tavily", self.tavily),
             ("you", self.you),
             ("you_news", self.you_news),
@@ -174,7 +188,7 @@ class EngineChain:
                 continue
 
             # 需 API key 的引擎,无 key 直接跳过
-            if engine_name in {"tavily", "you", "you_news"} and hasattr(engine, "has_api_keys"):
+            if engine_name in {"deepseek", "tavily", "you", "you_news"} and hasattr(engine, "has_api_keys"):
                 if not engine.has_api_keys():
                     logger.info("%s 未配置 API key,跳过", engine_name)
                     continue
@@ -187,11 +201,9 @@ class EngineChain:
                 if results:
                     logger.info("%s 搜索成功,返回 %d 条", engine_name, len(results))
                     self.last_success_engine = engine_name
-                    self.last_tavily_answer = (
-                        getattr(engine, "last_answer", None) if engine_name == "tavily" else None
-                    )
-                    return results
+                    self.last_tavily_answer = getattr(engine, "last_answer", None) if engine_name == "tavily" else None
+                    return results, engine_name
             except Exception as exc:  # noqa: BLE001
                 logger.warning("%s 搜索失败: %s", engine_name, exc)
 
-        return []
+        return [], ""

@@ -5,6 +5,7 @@
 """
 
 from .base import BaseSearchEngine, SearchResult
+from .deepseek import DeepSeekEngine
 from .google import GoogleEngine
 from .bing import BingEngine
 from .sogou import SogouEngine
@@ -14,6 +15,7 @@ from .you import YouSearchEngine, YouLiveNewsEngine, YouContentsClient, YouImage
 __all__ = [
     "BaseSearchEngine",
     "SearchResult",
+    "DeepSeekEngine",
     "GoogleEngine",
     "BingEngine",
     "SogouEngine",

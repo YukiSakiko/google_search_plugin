@@ -63,8 +63,7 @@ class GoogleSearchPlugin(MaiBotPlugin):
         self._build_pipelines()
         cfg = self.config
         self.ctx.logger.info(
-            "google_search_plugin v%s 已加载 (model=%s, default_engine=%s, "
-            "image_search=%s, translation=%s)",
+            "google_search_plugin v%s 已加载 (model=%s, default_engine=%s, image_search=%s, translation=%s)",
             cfg.plugin.version,
             cfg.models.model_name,
             cfg.search_backend.default_engine,
@@ -490,6 +489,8 @@ class GoogleSearchPlugin(MaiBotPlugin):
             enabled_engines.append("you")
         if e.you_news_enabled:
             enabled_engines.append("you_news")
+        if e.deepseek_enabled:
+            enabled_engines.append("deepseek")
 
         ready = all(
             v is not None

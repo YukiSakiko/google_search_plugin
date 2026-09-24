@@ -57,7 +57,7 @@ class SearchPipeline:
         """
         # ---- 1. 多引擎 fallback 搜索 ---- #
         max_results = self._backend.max_results
-        results = await self._engines.search_with_fallback(
+        results, last_engine = await self._engines.search_with_fallback(
             question,
             max_results,
             tavily_topic=tavily_topic_override,
@@ -65,10 +65,27 @@ class SearchPipeline:
         if not results:
             return f"关于「{question}」，我没有找到相关的网络信息。"
 
-        # ---- 2. 内容补充(Tavily inline / you_contents / 普通抓取) ---- #
-        last_engine = self._engines.last_success_engine or ""
+        # ---- 2. 内容补充与智能直出 (针对自带优质总结的 AI 引擎) ---- #
+        deepseek_summary_result = next(
+            (r for r in results if r.rank == -1 and r.title == "DeepSeek Summary"), None
+        )
+        if last_engine == "deepseek" and deepseek_summary_result and deepseek_summary_result.content:
+            logger.info("DeepSeek 服务端已生成完整解答，直接返回并跳过本地 LLM 二次总结")
+            answer = deepseek_summary_result.content.strip()
+            # 提取真实外部网页引用链接 (仅保留 rank >= 0 且协议合法的真实外部网页，杜绝合成条目与内部端点泄漏)
+            external_links = [
+                f"{idx}. [{r.title}]({r.url})"
+                for idx, r in enumerate(
+                    (r for r in results if r.rank >= 0 and r.url and r.url.startswith(("http://", "https://"))),
+                    start=1,
+                )
+            ]
+            if external_links:
+                answer += "\n\n【参考来源】：\n" + "\n".join(external_links[:8])
+            return answer
+
         if last_engine == "tavily":
-            self._fetcher.integrate_inline_content(results, self._engines.last_tavily_answer)
+            self._fetcher.integrate_inline_content(results, self._engines.last_tavily_answer, engine_name="Tavily")
         elif self._backend.fetch_content:
             results = await self._fetcher.fetch_batch(results, last_success_engine=last_engine)
 
@@ -86,9 +103,7 @@ class SearchPipeline:
             logger.warning("summarize LLM 调用失败: %s", exc)
             # 不回显抓取到的 abstract(可能含 PII / 边栏文字),只列搜索引擎元数据
             # (title + url 是公开的搜索结果索引信息,泄漏风险低)
-            links = "\n".join(
-                f"- {r.title}: {r.url}" for r in results if r.title and r.url
-            )
+            links = "\n".join(f"- {r.title}: {r.url}" for r in results if r.title and r.url)
             if links:
                 return f"已找到相关结果,但总结服务暂时不可用,可手动查看:\n\n{links}"
             return "搜索服务暂时不可用,请稍后再试。"
