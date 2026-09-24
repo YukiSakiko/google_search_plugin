@@ -21,7 +21,7 @@ class PluginSection(PluginConfigBase):
     __ui_order__ = 0
 
     name: str = Field(default="google_search", description="插件名称")
-    version: str = Field(default="4.0.2", description="插件版本")
+    version: str = Field(default="4.0.3", description="插件版本")
     config_version: str = Field(default="4.0.0", description="配置版本(Runner 用于兼容性校验)")
     enabled: bool = Field(default=True, description="是否启用插件")
 
