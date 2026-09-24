@@ -1,6 +1,6 @@
 {
   "manifest_version": 2,
-  "version": "4.0.2",
+  "version": "4.0.3",
   "name": "麦麦联网插件（search plugin）",
   "description": "支持多个搜索引擎的网络搜索、缩写翻译以及图片搜索，并提供自动降级能力。",
   "author": {
