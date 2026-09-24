@@ -150,7 +150,7 @@ class EngineChain:
         num_results: int,
         *,
         tavily_topic: Optional[str] = None,
-    ) -> "list[SearchResult]":
+    ) -> tuple[list[SearchResult], str]:
         """带降级的搜索。
 
         Args:
@@ -159,7 +159,7 @@ class EngineChain:
             tavily_topic: 可选的 Tavily topic 覆写(general/news)
 
         Returns:
-            搜索结果列表;所有引擎都失败时返回空列表
+            Tuple[list[SearchResult], str]: 搜索结果列表与成功命中的引擎名称;所有引擎都失败时返回 ([], "")
         """
         engines_cfg = self._engines_cfg
         default_engine = self._backend_cfg.default_engine
@@ -202,8 +202,8 @@ class EngineChain:
                     logger.info("%s 搜索成功,返回 %d 条", engine_name, len(results))
                     self.last_success_engine = engine_name
                     self.last_tavily_answer = getattr(engine, "last_answer", None) if engine_name == "tavily" else None
-                    return results
+                    return results, engine_name
             except Exception as exc:  # noqa: BLE001
                 logger.warning("%s 搜索失败: %s", engine_name, exc)
 
-        return []
+        return [], ""

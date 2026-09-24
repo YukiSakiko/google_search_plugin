@@ -57,7 +57,7 @@ class SearchPipeline:
         """
         # ---- 1. 多引擎 fallback 搜索 ---- #
         max_results = self._backend.max_results
-        results = await self._engines.search_with_fallback(
+        results, last_engine = await self._engines.search_with_fallback(
             question,
             max_results,
             tavily_topic=tavily_topic_override,
@@ -66,7 +66,6 @@ class SearchPipeline:
             return f"关于「{question}」，我没有找到相关的网络信息。"
 
         # ---- 2. 内容补充与智能直出 (针对自带优质总结的 AI 引擎) ---- #
-        last_engine = self._engines.last_success_engine or ""
         deepseek_summary_result = next(
             (r for r in results if r.rank == -1 and r.title == "DeepSeek Summary"), None
         )
