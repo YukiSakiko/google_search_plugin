@@ -65,10 +65,25 @@ class SearchPipeline:
         if not results:
             return f"关于「{question}」，我没有找到相关的网络信息。"
 
-        # ---- 2. 内容补充(Tavily inline / you_contents / 普通抓取) ---- #
+        # ---- 2. 内容补充与智能直出 (针对自带优质总结的 AI 引擎) ---- #
         last_engine = self._engines.last_success_engine or ""
+        if last_engine == "deepseek" and self._engines.last_deepseek_answer:
+            logger.info("DeepSeek 服务端已生成完整解答，直接返回并跳过本地 LLM 二次总结")
+            answer = self._engines.last_deepseek_answer.strip()
+            # 提取真实外部网页引用链接
+            valid_links = [
+                f"{idx}. [{r.title}]({r.url})"
+                for idx, r in enumerate(results, start=1)
+                if r.title and r.url and not r.url.startswith("https://api.deepseek.com")
+            ]
+            if valid_links:
+                answer += "\n\n【参考来源】：\n" + "\n".join(valid_links[:8])
+            return answer
+
         if last_engine == "tavily":
-            self._fetcher.integrate_inline_content(results, self._engines.last_tavily_answer)
+            self._fetcher.integrate_inline_content(results, self._engines.last_tavily_answer, engine_name="Tavily")
+        elif last_engine == "deepseek":
+            self._fetcher.integrate_inline_content(results, self._engines.last_deepseek_answer, engine_name="DeepSeek")
         elif self._backend.fetch_content:
             results = await self._fetcher.fetch_batch(results, last_success_engine=last_engine)
 
@@ -86,9 +101,7 @@ class SearchPipeline:
             logger.warning("summarize LLM 调用失败: %s", exc)
             # 不回显抓取到的 abstract(可能含 PII / 边栏文字),只列搜索引擎元数据
             # (title + url 是公开的搜索结果索引信息,泄漏风险低)
-            links = "\n".join(
-                f"- {r.title}: {r.url}" for r in results if r.title and r.url
-            )
+            links = "\n".join(f"- {r.title}: {r.url}" for r in results if r.title and r.url)
             if links:
                 return f"已找到相关结果,但总结服务暂时不可用,可手动查看:\n\n{links}"
             return "搜索服务暂时不可用,请稍后再试。"

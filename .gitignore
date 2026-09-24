@@ -208,3 +208,5 @@ __marimo__/
 
 # Local config with secrets
 config.toml
+config.toml*
+*.bak

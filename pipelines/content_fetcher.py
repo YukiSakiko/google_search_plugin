@@ -214,13 +214,15 @@ class ContentFetcher:
     @staticmethod
     def integrate_inline_content(
         results: "list[SearchResult]",
-        tavily_answer: Optional[str],
+        inline_answer: Optional[str],
+        engine_name: str = "Tavily",
     ) -> None:
-        """将 Tavily 自带的 answer / 内联 content 就地合并到 results。
+        """将 Tavily / DeepSeek 自带的 answer / 内联 content 就地合并到 results。
 
         Args:
             results: 搜索结果(就地修改)
-            tavily_answer: 上一次 Tavily 搜索的 ``last_answer``;无则 None
+            inline_answer: 上一次 API 搜索的 ``last_answer``;无则 None
+            engine_name: 引擎展示名称 (如 Tavily, DeepSeek)
         """
         if not results:
             return
@@ -228,11 +230,11 @@ class ContentFetcher:
         # 重要的延迟导入,避免循环
         from ..search_engines.base import SearchResult
 
-        if tavily_answer:
-            summarized = tavily_answer.strip()
+        if inline_answer:
+            summarized = inline_answer.strip()
             if summarized:
                 answer_result = SearchResult(
-                    title="Tavily Summary",
+                    title=f"{engine_name} Summary",
                     url="",
                     snippet=summarized,
                     abstract=summarized,

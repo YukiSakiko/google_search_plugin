@@ -76,7 +76,7 @@ class SearchBackendSection(PluginConfigBase):
     __ui_icon__ = "globe"
     __ui_order__ = 3
 
-    default_engine: Literal["google", "bing", "sogou", "duckduckgo", "tavily", "you", "you_news"] = Field(
+    default_engine: Literal["google", "bing", "sogou", "duckduckgo", "tavily", "you", "you_news", "deepseek"] = Field(
         default="bing",
         description="默认搜索引擎",
     )
@@ -195,6 +195,29 @@ class EnginesSection(PluginConfigBase):
         description="是否强制使用 You Contents(不受搜索引擎来源限制)",
     )
     you_images_enabled: bool = Field(default=False, description="是否启用 You Images(early access)")
+
+    # DeepSeek
+    deepseek_enabled: bool = Field(default=False, description="是否启用 DeepSeek 官方联网搜索")
+    deepseek_api_keys: list[str] = Field(
+        default_factory=list,
+        description="DeepSeek API key 列表,填写多个时随机选用",
+    )
+    deepseek_api_key: str = Field(
+        default="",
+        description="DeepSeek API key;留空则使用环境变量 DEEPSEEK_API_KEY",
+    )
+    deepseek_base_url: str = Field(
+        default="https://api.deepseek.com",
+        description="DeepSeek API 基础地址（自动适配 /anthropic/v1/messages 端点）",
+    )
+    deepseek_model: str = Field(
+        default="deepseek-chat",
+        description="DeepSeek 调用的模型名称（默认 deepseek-chat）",
+    )
+    deepseek_max_tokens: int = Field(
+        default=2048,
+        description="DeepSeek 生成答案的最大 Token 数",
+    )
 
 
 class TranslationSection(PluginConfigBase):
