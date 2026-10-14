@@ -87,19 +87,41 @@ def build_url_summarize_prompt(*, bot_name: str, url: str, content: str) -> str:
     ).strip()
 
 
-def format_results_for_prompt(results: "list[SearchResult]") -> str:
+def format_results_for_prompt(
+    results: "list[SearchResult]",
+    *,
+    source_max_chars: int,
+    total_max_chars: int,
+) -> str:
     """格式化搜索结果用于 summarize prompt 的 ``[搜索到的资料]`` 段。
 
     Args:
         results: 搜索结果列表
     """
     lines: list[str] = []
+    total_chars = 0
     for idx, result in enumerate(results, start=1):
+        if total_chars >= total_max_chars:
+            break
+
         header = f"{idx}. {result.title}"
         if result.url:
             header += f" {result.url}"
         lines.append(header)
-        if result.abstract:
-            lines.append(result.abstract)
+
+        remaining_chars = min(source_max_chars, total_max_chars - total_chars)
+        abstract = (result.abstract or result.snippet or "").strip()
+        content = (result.content or "").strip()
+        if abstract:
+            abstract_excerpt = abstract[:remaining_chars]
+            lines.append(f"摘要：{abstract_excerpt}")
+            total_chars += len(abstract_excerpt)
+            remaining_chars -= len(abstract_excerpt)
+
+        # Tavily 的 raw_content 会写入 content；仅在它不同于摘要且仍有预算时附带正文。
+        if content and content != abstract and remaining_chars > 0:
+            content_excerpt = content[:remaining_chars]
+            lines.append(f"正文摘录：{content_excerpt}")
+            total_chars += len(content_excerpt)
         lines.append("")
     return "\n".join(lines).strip()
