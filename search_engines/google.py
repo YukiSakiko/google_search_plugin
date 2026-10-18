@@ -59,7 +59,11 @@ _SNIPPET_SELECTOR = (
 # 二进制 base64 令牌而非明文 URL, 服务端跟随重定向只会落到
 # "Redirect Notice - The previous page is sending you to an invalid url",
 # 必须重试一次换取明文 /url?q=https://... 变体。
-_OPAQUE_REDIRECT_MARKERS = ("q=CAES", "uoh=")
+#
+# 判定只看 SERP 里 /url? 跳转链接的目标, 不做整页子串匹配: 查询词本身
+# 含 "uoh=" / "q=CAES" 时会被回显进 <title> 等无关位置, 整页匹配会误判成
+# 加密变体并丢弃本来可解析的结果。
+_REDIRECT_ANCHOR_SELECTOR = 'a[href*="/url?"]'
 
 
 class GoogleEngine(BaseSearchEngine):
@@ -149,15 +153,33 @@ class GoogleEngine(BaseSearchEngine):
         )
 
     def _is_opaque_redirect(self, html: str) -> bool:
-        """识别整页结果外链都是加密跳转令牌的变体。
+        """识别结果外链被换成加密跳转令牌的变体。
 
         Google 有概率(实测约 1/15)把结果外链换成 ``/url?q=CAES...&uoh=3``
         这种二进制 base64 令牌。这类链接既不是 http(s) 也无法在无 JS 环境
         下解出真实目标: 服务端跟随重定向只会拿到
         "Redirect Notice - The previous page is sending you to an invalid url"。
-        所以只能判定为不可用, 由 search() 重试一次拿明文变体。
+
+        判定只看 SERP 里实际的 /url? 跳转链接目标, 不扫整页字符串。整页
+        匹配会被查询词回显(<title>uoh=3 xxx - Google 搜索</title>)误触发,
+        那种页面结果其实是好的。同时要求"页面确实存在跳转链接", 避免在
+        没有任何 /url? 链接的页面上凭空判定。
         """
-        return any(marker in html for marker in _OPAQUE_REDIRECT_MARKERS)
+        soup = BeautifulSoup(html, "html.parser")
+        anchors = soup.select(_REDIRECT_ANCHOR_SELECTOR)
+        if not anchors:
+            return False
+        for anchor in anchors:
+            href = str(anchor.get("href") or "")
+            try:
+                target = parse_qs(urlparse(href).query).get("q", [""])[0]
+            except ValueError:
+                continue
+            # 明文跳转是 /url?q=https://..., 加密变体是 /url?q=CAES... 这种
+            # 不以 scheme 开头的 base64 令牌。
+            if target and not target.startswith(("http://", "https://")):
+                return True
+        return False
 
     async def _fetch(self, url: str) -> tuple[int, str, str]:
         """请求 Google, 返回 (status, final_url, html)。
@@ -287,27 +309,33 @@ class GoogleEngine(BaseSearchEngine):
                 )
                 return []
 
-            # 加密跳转变体: 整页外链都是 uoh=3 令牌, 解析不出 http(s) URL。
-            # 同 query 重试一次即可拿到明文变体(实测命中率约 14/15)。
-            if self._is_opaque_redirect(html):
+            # 先解析。有结果就直接返回, 不做任何加密跳转判定 —— 解析器本身
+            # 已经过滤掉了非 http(s) 的链接, 能解析出结果就说明页面是可用的。
+            results = self._parse(html)
+
+            # 只有解析为空时才考虑加密跳转变体: 此时再看结果外链是否被换成
+            # 了 base64 令牌, 是则同 query 重试一次换取明文变体
+            # (实测 15 次里 14 次能拿到明文)。
+            if not results and self._is_opaque_redirect(html):
                 logger.warning(
                     "Google returned opaque redirect tokens for query '%s'; retrying once",
                     query,
                 )
                 status, final_url, html = await self._fetch(url)
-                if self._is_captcha(status, final_url, html) or status != 200:
+                if status != 200 or self._is_captcha(status, final_url, html):
                     logger.warning(
                         "Google retry failed for query '%s' (status=%d)", query, status,
                     )
                     return []
-                if self._is_opaque_redirect(html):
+                if self._is_javascript_wall(status, html):
                     logger.warning(
-                        "Google still returned opaque redirect tokens for query '%s' after retry",
+                        "Google retry hit JavaScript wall for query '%s' (html_len=%d)",
                         query,
+                        len(html),
                     )
                     return []
+                results = self._parse(html)
 
-            results = self._parse(html)
             if not results:
                 logger.warning(
                     "Google parsed 0 results for query '%s' (html_len=%d)", query, len(html),
