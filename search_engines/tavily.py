@@ -23,7 +23,7 @@ class TavilyEngine(BaseSearchEngine, ApiKeyMixin):
 
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(config)
-        self._init_api_keys(self.config, "TAVILY_API_KEY")
+        self._init_api_keys(self.config)
         self.search_depth = self.config.get("search_depth", "basic")
         self.include_raw_content = self.config.get("include_raw_content", True)
         self.include_answer = self.config.get("include_answer", True)

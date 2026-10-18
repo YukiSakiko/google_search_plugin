@@ -37,7 +37,7 @@ class YouSearchEngine(BaseSearchEngine, ApiKeyMixin):
 
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(config)
-        self._init_api_keys(self.config, "YOU_API_KEY")
+        self._init_api_keys(self.config)
 
     async def search(self, query: str, num_results: int) -> List[SearchResult]:
         api_keys = self._iter_api_keys()
@@ -188,7 +188,7 @@ class YouLiveNewsEngine(BaseSearchEngine, ApiKeyMixin):
 
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(config)
-        self._init_api_keys(self.config, "YOU_API_KEY")
+        self._init_api_keys(self.config)
         if self.config.get("enabled"):
             logger.info("You Live News is early access; ensure the API key has access.")
 
@@ -308,7 +308,7 @@ class YouContentsClient(ApiKeyMixin):
         self.proxy = self.config.get("proxy")
         self.format = self.config.get("format", "markdown")
         self.force = bool(self.config.get("force", False))
-        self._init_api_keys(self.config, "YOU_API_KEY")
+        self._init_api_keys(self.config)
 
     async def fetch_contents(self, urls: List[str]) -> Dict[str, str]:
         api_keys = self._iter_api_keys()
@@ -426,7 +426,7 @@ class YouImagesEngine(BaseSearchEngine, ApiKeyMixin):
 
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(config)
-        self._init_api_keys(self.config, "YOU_API_KEY")
+        self._init_api_keys(self.config)
         if self.config.get("enabled"):
             logger.info("You Images is early access; ensure the API key has access.")
 

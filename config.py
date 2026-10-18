@@ -22,7 +22,7 @@ class PluginSection(PluginConfigBase):
 
     name: str = Field(default="google_search", description="插件名称")
     version: str = Field(default="4.0.3", description="插件版本")
-    config_version: str = Field(default="4.0.0", description="配置版本(Runner 用于兼容性校验)")
+    config_version: str = Field(default="4.1.0", description="配置版本(Runner 用于兼容性校验)")
     enabled: bool = Field(default=True, description="是否启用插件")
 
 
@@ -142,9 +142,8 @@ class EnginesSection(PluginConfigBase):
     tavily_enabled: bool = Field(default=False, description="是否启用 Tavily 搜索")
     tavily_api_keys: list[str] = Field(
         default_factory=list,
-        description="Tavily API key 列表,填写多个时随机选用",
+        description="Tavily API key 列表，每项一把密钥；单个密钥也填写到列表中，多个密钥随机尝试",
     )
-    tavily_api_key: str = Field(default="", description="Tavily API key;留空则使用环境变量 TAVILY_API_KEY")
     tavily_search_depth: Literal["basic", "advanced"] = Field(default="basic", description="搜索深度")
     tavily_include_raw_content: bool = Field(default=False, description="是否返回网页原始内容")
     tavily_include_answer: bool = Field(default=True, description="是否返回 Tavily 生成的答案")
@@ -163,9 +162,8 @@ class EnginesSection(PluginConfigBase):
     you_news_enabled: bool = Field(default=False, description="是否启用 You Live News(early access)")
     you_api_keys: list[str] = Field(
         default_factory=list,
-        description="You API key 列表,填写多个时随机选用",
+        description="You API key 列表，每项一把密钥；Search、Live News、Contents 和 Images 共用",
     )
-    you_api_key: str = Field(default="", description="You API key;留空则使用环境变量 YOU_API_KEY")
     you_freshness: str = Field(
         default="",
         description="You 搜索时间范围(可选:day/week/month/year;留空表示不限)",
@@ -200,11 +198,7 @@ class EnginesSection(PluginConfigBase):
     deepseek_enabled: bool = Field(default=False, description="是否启用 DeepSeek 官方联网搜索")
     deepseek_api_keys: list[str] = Field(
         default_factory=list,
-        description="DeepSeek API key 列表,填写多个时随机选用",
-    )
-    deepseek_api_key: str = Field(
-        default="",
-        description="DeepSeek API key;留空则使用环境变量 DEEPSEEK_API_KEY",
+        description="DeepSeek API key 列表，每项一把密钥；单个密钥也填写到列表中，多个密钥随机尝试",
     )
     deepseek_base_url: str = Field(
         default="https://api.deepseek.com",

@@ -1,6 +1,5 @@
 import base64
 import logging
-import os
 import random
 import re
 import warnings
@@ -36,12 +35,9 @@ def _collect_api_key_values(value: Optional[Any]) -> List[str]:
     return []
 
 
-def load_api_keys(config: Dict[str, Any], env_var: str) -> List[str]:
-    candidates: List[str] = (
-        _collect_api_key_values(config.get("api_keys"))
-        + _collect_api_key_values(config.get("api_key"))
-        + _collect_api_key_values(os.environ.get(env_var))
-    )
+def load_api_keys(config: Dict[str, Any]) -> List[str]:
+    """仅从配置中的密钥列表读取，去除空项、首尾空白和重复密钥。"""
+    candidates = _collect_api_key_values(config.get("api_keys"))
     seen = set()
     unique_keys: List[str] = []
     for key in candidates:
@@ -54,8 +50,8 @@ def load_api_keys(config: Dict[str, Any], env_var: str) -> List[str]:
 class ApiKeyMixin:
     api_keys: List[str]
 
-    def _init_api_keys(self, config: Dict[str, Any], env_var: str) -> None:
-        self.api_keys = load_api_keys(config, env_var)
+    def _init_api_keys(self, config: Dict[str, Any]) -> None:
+        self.api_keys = load_api_keys(config)
 
     def has_api_keys(self) -> bool:
         return bool(self.api_keys)
