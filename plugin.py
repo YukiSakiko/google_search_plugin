@@ -12,13 +12,15 @@
 
 from __future__ import annotations
 
+from typing import Any, Mapping, Optional
+
 import logging
-from typing import Any, Optional
 
 from maibot_sdk import Action, Command, MaiBotPlugin, Tool
 from maibot_sdk.types import ActivationType, ToolParameterInfo, ToolParamType
 
 from .config import GoogleSearchPluginConfig
+from .config_ui import build_config_ui_schema
 from .pipelines.content_fetcher import ContentFetcher
 from .pipelines.engine_chain import EngineChain
 from .pipelines.image_search_pipeline import ImageSearchPipeline
@@ -29,12 +31,52 @@ from .pipelines.zhihu_extractor import ZhihuExtractor
 from .translators.nbnhhsh import NbnhhshTranslator
 
 ALLOWED_TAVILY_TOPICS = frozenset({"general", "news"})
+_API_KEY_PROVIDERS = ("tavily", "you", "deepseek")
 
 
 class GoogleSearchPlugin(MaiBotPlugin):
     """麦麦联网插件主类"""
 
     config_model = GoogleSearchPluginConfig
+
+    @classmethod
+    def build_config_schema(cls, **plugin_info: str) -> dict[str, Any]:
+        """只重组 WebUI 展示；配置模型和 TOML 路径保持不变。"""
+        return build_config_ui_schema(super().build_config_schema(**plugin_info))
+
+    def get_default_config(self) -> dict[str, Any]:
+        """保留旧字段直到插件归一化，避免宿主升级重建时提前丢弃密钥。"""
+        # 只扩展宿主使用的实例入口；SDK 归一化仍使用干净的 build_default_config()。
+        defaults = super().get_default_config()
+        for provider in _API_KEY_PROVIDERS:
+            defaults["engines"][f"{provider}_api_key"] = ""
+        return defaults
+
+    def normalize_plugin_config(self, config_data: Mapping[str, Any] | None) -> tuple[dict[str, Any], bool]:
+        """将旧单密钥一次性并入列表，输出始终遵循当前配置模型。"""
+        raw_config = dict(config_data) if config_data is not None else {}
+        source_engines = raw_config.get("engines")
+        if not isinstance(source_engines, Mapping):
+            return super().normalize_plugin_config(config_data)
+
+        engines = dict(source_engines)
+        for provider in _API_KEY_PROVIDERS:
+            old_field = f"{provider}_api_key"
+            old_key = engines.pop(old_field, "")
+            if not isinstance(old_key, str):
+                raise ValueError(f"engines.{old_field} 必须是字符串")
+            old_key = old_key.strip()
+            if not old_key:
+                continue
+            list_field = f"{provider}_api_keys"
+            keys = engines.get(list_field, [])
+            if not isinstance(keys, list):
+                raise ValueError(f"engines.{list_field} 必须是密钥列表")
+            if not any(isinstance(key, str) and key.strip() == old_key for key in keys):
+                engines[list_field] = [*keys, old_key]
+        raw_config["engines"] = engines
+        normalized, changed = super().normalize_plugin_config(raw_config)
+        return normalized, changed or normalized != config_data
 
     # 运行时组件:在 on_load / on_config_update 中装配
     _engine_chain: Optional[EngineChain]

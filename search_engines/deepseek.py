@@ -25,7 +25,7 @@ class DeepSeekEngine(BaseSearchEngine, ApiKeyMixin):
 
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(config)
-        self._init_api_keys(self.config, "DEEPSEEK_API_KEY")
+        self._init_api_keys(self.config)
         self.base_url = self._resolve_endpoint_url(self.config.get("base_url") or "https://api.deepseek.com")
         self.model = self.config.get("model") or "deepseek-chat"
         self.max_tokens = int(self.config.get("max_tokens") or 2048)

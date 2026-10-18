@@ -65,7 +65,6 @@ def _build_engine_dict(
             {
                 "enabled": engines.tavily_enabled,
                 "api_keys": list(engines.tavily_api_keys),
-                "api_key": engines.tavily_api_key,
                 "search_depth": engines.tavily_search_depth,
                 "include_raw_content": engines.tavily_include_raw_content,
                 "include_answer": engines.tavily_include_answer,
@@ -78,7 +77,6 @@ def _build_engine_dict(
             {
                 "enabled": engines.deepseek_enabled,
                 "api_keys": list(engines.deepseek_api_keys),
-                "api_key": engines.deepseek_api_key,
                 "base_url": engines.deepseek_base_url,
                 "model": engines.deepseek_model,
                 "max_tokens": engines.deepseek_max_tokens,
@@ -89,7 +87,6 @@ def _build_engine_dict(
             {
                 "enabled": engines.you_enabled,
                 "api_keys": list(engines.you_api_keys),
-                "api_key": engines.you_api_key,
                 "freshness": engines.you_freshness,
                 "offset": engines.you_offset,
                 "country": engines.you_country,
@@ -104,7 +101,6 @@ def _build_engine_dict(
             {
                 "enabled": engines.you_news_enabled,
                 "api_keys": list(engines.you_api_keys),
-                "api_key": engines.you_api_key,
             }
         )
     elif engine_name == "you_contents":
@@ -112,9 +108,15 @@ def _build_engine_dict(
             {
                 "enabled": engines.you_contents_enabled,
                 "api_keys": list(engines.you_api_keys),
-                "api_key": engines.you_api_key,
                 "format": engines.you_contents_format,
                 "force": engines.you_contents_force,
+            }
+        )
+    elif engine_name == "you_images":
+        cfg.update(
+            {
+                "enabled": engines.you_images_enabled,
+                "api_keys": list(engines.you_api_keys),
             }
         )
     return cfg
