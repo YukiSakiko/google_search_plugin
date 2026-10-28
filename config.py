@@ -4,7 +4,11 @@
 ``model_config``——Pydantic v2 把这个名字保留给 BaseModel 的元数据属性。
 """
 
+import json
+from datetime import datetime
 from typing import Literal
+
+from pydantic import field_validator, model_validator
 
 from maibot_sdk import Field, PluginConfigBase
 
@@ -22,7 +26,7 @@ class PluginSection(PluginConfigBase):
 
     name: str = Field(default="google_search", description="插件名称")
     version: str = Field(default="4.0.3", description="插件版本")
-    config_version: str = Field(default="4.1.0", description="配置版本(Runner 用于兼容性校验)")
+    config_version: str = Field(default="4.2.1", description="配置版本(Runner 用于兼容性校验)")
     enabled: bool = Field(default=True, description="是否启用插件")
 
 
@@ -76,7 +80,9 @@ class SearchBackendSection(PluginConfigBase):
     __ui_icon__ = "globe"
     __ui_order__ = 3
 
-    default_engine: Literal["google", "bing", "sogou", "duckduckgo", "tavily", "you", "you_news", "deepseek"] = Field(
+    default_engine: Literal[
+        "google", "bing", "sogou", "duckduckgo", "tavily", "anysearch", "exa", "you", "you_news", "deepseek"
+    ] = Field(
         default="bing",
         description="默认搜索引擎",
     )
@@ -156,6 +162,122 @@ class EnginesSection(PluginConfigBase):
         ),
     )
     tavily_turbo: bool = Field(default=False, description="是否启用 Tavily Turbo 模式")
+
+    # AnySearch
+    anysearch_enabled: bool = Field(default=True, description="是否启用 AnySearch 搜索")
+    anysearch_api_keys: list[str] = Field(
+        default_factory=list,
+        description="AnySearch API key 列表，每项一把密钥；多个密钥随机尝试，留空使用匿名请求",
+    )
+    anysearch_tag: str = Field(default="", description="搜索能力标签，例如 code.doc；留空由 AnySearch 自动选择")
+    anysearch_zone: Literal["auto", "cn", "intl"] = Field(
+        default="auto", description="搜索区域：auto 自动、cn 国内、intl 国际"
+    )
+    anysearch_language: str = Field(default="", description="搜索语言，例如 zh-CN 或 en-US；留空使用服务端默认值")
+    anysearch_params: str = Field(
+        default="",
+        description='标签专属参数，填写 JSON 对象，例如 {"library":"golang"}；留空不传',
+    )
+    anysearch_format: Literal["json", "markdown"] = Field(default="json", description="API 返回内容格式")
+
+    # Exa
+    exa_enabled: bool = Field(default=False, description="是否启用 Exa 搜索")
+    exa_api_keys: list[str] = Field(
+        default_factory=list,
+        description="Exa API key 列表，每项一把密钥；单个密钥也填写到列表中，多个密钥随机尝试",
+    )
+    exa_search_type: Literal["auto", "lite", "deep-lite", "deep"] = Field(
+        default="auto",
+        description="搜索类型：auto 自动、lite 低延迟缓存检索、deep-lite 轻量深度检索、deep 深度检索",
+    )
+    exa_category: str = Field(default="", description="内容类别，例如 news、research paper、company、people；留空不限")
+    exa_include_domains: list[str] = Field(
+        default_factory=list, max_length=1200, description="仅搜索这些域名或路径前缀，支持子域通配符；留空不限"
+    )
+    exa_exclude_domains: list[str] = Field(
+        default_factory=list, max_length=1200, description="排除这些域名或路径前缀，最多 1200 项；people 类别不支持"
+    )
+    exa_start_published_date: str = Field(
+        default="", description="最早发布日期，ISO 8601 格式；company/people 类别不支持"
+    )
+    exa_end_published_date: str = Field(default="", description="最晚发布日期，ISO 8601 格式；留空不限")
+    exa_user_location: str = Field(default="", description="搜索位置的两字母国家代码，例如 CN 或 US；留空不指定")
+    exa_moderation: bool = Field(default=False, description="是否过滤不适宜内容")
+    exa_objective: str = Field(default="", max_length=4096, description="补充搜索目标，最多 4096 字符；留空不传")
+    exa_additional_queries: list[str] = Field(
+        default_factory=list, max_length=10, description="附加查询，最多 10 项；仅 deep-lite/deep 支持"
+    )
+    exa_include_highlights: bool = Field(default=True, description="返回与搜索相关的原文片段，不生成总结")
+    exa_highlights_query: str = Field(default="", description="原文片段的提取目标；留空使用搜索问题")
+    exa_highlights_max_characters: int = Field(
+        default=0, ge=0, le=1000000, description="每条结果的片段字符上限，0 使用服务端默认值"
+    )
+    exa_include_text: bool = Field(default=False, description="在搜索响应中返回正文，不额外调用 Contents 接口")
+    exa_text_max_characters: int = Field(
+        default=0, ge=0, le=1000000, description="每条结果的正文字符上限，0 使用服务端默认值"
+    )
+    exa_max_age_hours: int = Field(
+        default=-2, ge=-2, le=720, description="服务端缓存时效：-2 自动、-1 仅缓存、0 最新、正数为小时；lite 仅支持 -2"
+    )
+    exa_livecrawl_timeout_ms: int = Field(
+        default=0, ge=0, le=90000, description="Exa 服务端获取内容的超时毫秒数；0 使用默认值，lite 仅支持 0"
+    )
+
+    @field_validator("anysearch_zone", mode="before")
+    @classmethod
+    def normalize_anysearch_zone(cls, value: object) -> object:
+        # Legacy empty values mean automatic selection, not a blank select item.
+        return "auto" if value == "" else value
+
+    @field_validator("anysearch_params")
+    @classmethod
+    def validate_anysearch_params(cls, value: str) -> str:
+        value = value.strip()
+        if value:
+            try:
+                params = json.loads(value)
+            except ValueError:
+                raise ValueError("AnySearch 标签参数必须是合法 JSON 对象") from None
+            if not isinstance(params, dict):
+                raise ValueError("AnySearch 标签参数必须是 JSON 对象")
+        return value
+
+    @field_validator("exa_include_domains", "exa_exclude_domains", "exa_additional_queries")
+    @classmethod
+    def clean_search_lists(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(value.strip() for value in values if value.strip()))
+
+    @field_validator("exa_user_location")
+    @classmethod
+    def validate_exa_location(cls, value: str) -> str:
+        value = value.strip().upper()
+        if value and (len(value) != 2 or not value.isascii() or not value.isalpha()):
+            raise ValueError("Exa 搜索位置必须是两字母国家代码")
+        return value
+
+    @field_validator("exa_start_published_date", "exa_end_published_date")
+    @classmethod
+    def validate_exa_date(cls, value: str) -> str:
+        value = value.strip()
+        if value:
+            try:
+                datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                raise ValueError("Exa 发布日期必须是 ISO 8601 日期或时间") from None
+        return value
+
+    @model_validator(mode="after")
+    def validate_exa_options(self) -> "EnginesSection":
+        if self.exa_additional_queries and self.exa_search_type not in {"deep-lite", "deep"}:
+            raise ValueError("Exa 附加查询仅支持 deep-lite/deep 模式")
+        if self.exa_search_type == "lite" and (self.exa_max_age_hours != -2 or self.exa_livecrawl_timeout_ms != 0):
+            raise ValueError("Exa lite 模式不支持自定义缓存时效或服务端抓取超时")
+        category = self.exa_category.strip().lower()
+        if category in {"company", "people"} and (self.exa_start_published_date or self.exa_end_published_date):
+            raise ValueError("Exa company/people 类别不支持发布日期过滤")
+        if category == "people" and self.exa_exclude_domains:
+            raise ValueError("Exa people 类别不支持排除域名")
+        return self
 
     # You
     you_enabled: bool = Field(default=False, description="是否启用 You Search")

@@ -2,7 +2,7 @@
 
 为麦麦提供网页搜索与答案总结，另支持图片搜索和网络缩写翻译。
 
-支持 Google、Bing、搜狗、DuckDuckGo / DDGS、Tavily、You 和 DeepSeek；搜索失败时自动尝试其他已启用的引擎。
+支持 Google、Bing、搜狗、DuckDuckGo / DDGS、Tavily、AnySearch、Exa、You 和 DeepSeek；搜索失败时自动尝试其他已启用的引擎。
 
 ## 安装依赖
 
@@ -22,13 +22,13 @@ uv pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 想更换搜索引擎时：
 
 1. 在“搜索引擎”页启用需要的引擎。
-2. 使用 Tavily、You 或 DeepSeek 时，在对应的 API 密钥列表中添加密钥。**只有一把密钥也填列表的一项**；多把密钥每项一把，会自动随机轮换。
+2. 使用 Tavily、AnySearch、Exa、You 或 DeepSeek 时，在对应的 API 密钥列表中添加密钥（AnySearch 可留空）。**只有一把密钥也填列表的一项**；多把密钥每项一把，会自动随机轮换。
 3. 在“常用设置”选择默认引擎；使用 Google 等需要代理的网络环境时，按需填写代理地址。
 
 选择默认引擎不会自动启用它，需先完成第 1 步。
 总结直接复用麦麦的模型任务，通常无需额外配置模型接口。
 
-Tavily 和 You 的密钥可分别前往 [Tavily](https://app.tavily.com) 和 [You](https://you.com/platform) 官网获取。
+Tavily、You、AnySearch 和 Exa 的密钥可分别前往 [Tavily](https://app.tavily.com)、[You](https://you.com/platform)、[AnySearch](https://anysearch.com) 和 [Exa](https://exa.ai) 官网获取。
 作者提供的临时邮箱：[邮箱 1](https://xiaowan258.me)、[邮箱 2](https://mail.xiaowan.me)。
 
 ## 配置入口

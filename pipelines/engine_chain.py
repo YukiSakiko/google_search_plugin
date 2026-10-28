@@ -6,12 +6,15 @@ last_tavily_answer)。SearchPipeline 通过它发起搜索。
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
+from ..search_engines.anysearch import AnySearchEngine
 from ..search_engines.bing import BingEngine
 from ..search_engines.deepseek import DeepSeekEngine
 from ..search_engines.duckduckgo import DuckDuckGoEngine
+from ..search_engines.exa import ExaEngine
 from ..search_engines.google import GoogleEngine
 from ..search_engines.sogou import SogouEngine
 from ..search_engines.tavily import TavilyEngine
@@ -70,6 +73,42 @@ def _build_engine_dict(
                 "include_answer": engines.tavily_include_answer,
                 "topic": engines.tavily_topic,
                 "turbo": engines.tavily_turbo,
+            }
+        )
+    elif engine_name == "anysearch":
+        cfg.update(
+            {
+                "enabled": engines.anysearch_enabled,
+                "api_keys": list(engines.anysearch_api_keys),
+                "tag": engines.anysearch_tag,
+                "zone": "" if engines.anysearch_zone == "auto" else engines.anysearch_zone,
+                "language": engines.anysearch_language,
+                "params": json.loads(engines.anysearch_params) if engines.anysearch_params else {},
+                "format": engines.anysearch_format,
+            }
+        )
+    elif engine_name == "exa":
+        cfg.update(
+            {
+                "enabled": engines.exa_enabled,
+                "api_keys": list(engines.exa_api_keys),
+                "search_type": engines.exa_search_type,
+                "category": engines.exa_category,
+                "include_domains": list(engines.exa_include_domains),
+                "exclude_domains": list(engines.exa_exclude_domains),
+                "start_published_date": engines.exa_start_published_date,
+                "end_published_date": engines.exa_end_published_date,
+                "user_location": engines.exa_user_location,
+                "moderation": engines.exa_moderation,
+                "objective": engines.exa_objective,
+                "additional_queries": list(engines.exa_additional_queries),
+                "include_highlights": engines.exa_include_highlights,
+                "highlights_query": engines.exa_highlights_query,
+                "highlights_max_characters": engines.exa_highlights_max_characters,
+                "include_text": engines.exa_include_text,
+                "text_max_characters": engines.exa_text_max_characters,
+                "max_age_hours": engines.exa_max_age_hours,
+                "livecrawl_timeout_ms": engines.exa_livecrawl_timeout_ms,
             }
         )
     elif engine_name == "deepseek":
@@ -138,6 +177,8 @@ class EngineChain:
         self.sogou = SogouEngine(_build_engine_dict("sogou", engines, common))
         self.duckduckgo = DuckDuckGoEngine(_build_engine_dict("duckduckgo", engines, common))
         self.tavily = TavilyEngine(_build_engine_dict("tavily", engines, common))
+        self.anysearch = AnySearchEngine(_build_engine_dict("anysearch", engines, common))
+        self.exa = ExaEngine(_build_engine_dict("exa", engines, common))
         self.deepseek = DeepSeekEngine(_build_engine_dict("deepseek", engines, common))
         self.you = YouSearchEngine(_build_engine_dict("you", engines, common))
         self.you_news = YouLiveNewsEngine(_build_engine_dict("you_news", engines, common))
@@ -166,10 +207,12 @@ class EngineChain:
         engines_cfg = self._engines_cfg
         default_engine = self._backend_cfg.default_engine
 
-        # 引擎优先级:deepseek / tavily / you 系列优先(质量较高的 API 引擎),其余兜底
+        # API 引擎优先,其余兜底;显式配置的默认引擎始终排在最前。
         all_engines: list[tuple[str, Any]] = [
             ("deepseek", self.deepseek),
             ("tavily", self.tavily),
+            ("anysearch", self.anysearch),
+            ("exa", self.exa),
             ("you", self.you),
             ("you_news", self.you_news),
             ("google", self.google),
@@ -190,7 +233,7 @@ class EngineChain:
                 continue
 
             # 需 API key 的引擎,无 key 直接跳过
-            if engine_name in {"deepseek", "tavily", "you", "you_news"} and hasattr(engine, "has_api_keys"):
+            if engine_name in {"deepseek", "tavily", "exa", "you", "you_news"} and hasattr(engine, "has_api_keys"):
                 if not engine.has_api_keys():
                     logger.info("%s 未配置 API key,跳过", engine_name)
                     continue
