@@ -4,8 +4,10 @@
 提供统一的搜索引擎抽象接口和具体实现
 """
 
+from .anysearch import AnySearchEngine
 from .base import BaseSearchEngine, SearchResult
 from .deepseek import DeepSeekEngine
+from .exa import ExaEngine
 from .google import GoogleEngine
 from .bing import BingEngine
 from .sogou import SogouEngine
@@ -15,7 +17,9 @@ from .you import YouSearchEngine, YouLiveNewsEngine, YouContentsClient, YouImage
 __all__ = [
     "BaseSearchEngine",
     "SearchResult",
+    "AnySearchEngine",
     "DeepSeekEngine",
+    "ExaEngine",
     "GoogleEngine",
     "BingEngine",
     "SogouEngine",

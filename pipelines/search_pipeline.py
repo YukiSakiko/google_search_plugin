@@ -15,11 +15,24 @@ from .prompts import build_summarize_prompt, format_results_for_prompt
 
 if TYPE_CHECKING:
     from ..config import SearchBackendSection
+    from ..search_engines.base import SearchResult
     from .content_fetcher import ContentFetcher
     from .engine_chain import EngineChain
     from .llm_runner import LLMRunner
 
 logger = logging.getLogger(__name__)
+
+
+def _format_direct_results(results: list[SearchResult], max_content_length: int) -> str:
+    """直接展示 API 提供的正文片段,不调用网页抓取或总结模型。"""
+    sections: list[str] = []
+    for index, result in enumerate(results, start=1):
+        header = f"{index}. [{result.title}]({result.url})"
+        content = (result.content or result.abstract or result.snippet).strip()
+        if max_content_length > 0 and len(content) > max_content_length:
+            content = content[:max_content_length] + "..."
+        sections.append(f"{header}\n{content}" if content else header)
+    return "\n\n".join(sections)
 
 
 class SearchPipeline:
@@ -53,7 +66,7 @@ class SearchPipeline:
             tavily_topic_override: 调用方显式指定的 tavily topic
 
         Returns:
-            LLM 总结文本;无可用结果时返回提示文本
+            API 直返结果或 LLM 总结文本;无可用结果时返回提示文本
         """
         # ---- 1. 多引擎 fallback 搜索 ---- #
         max_results = self._backend.max_results
@@ -65,10 +78,12 @@ class SearchPipeline:
         if not results:
             return f"关于「{question}」，我没有找到相关的网络信息。"
 
+        if last_engine in {"anysearch", "exa"}:
+            logger.info("%s 直接返回 API 搜索内容,跳过网页抓取与本地 LLM 总结", last_engine)
+            return _format_direct_results(results, self._backend.max_content_length)
+
         # ---- 2. 内容补充与智能直出 (针对自带优质总结的 AI 引擎) ---- #
-        deepseek_summary_result = next(
-            (r for r in results if r.rank == -1 and r.title == "DeepSeek Summary"), None
-        )
+        deepseek_summary_result = next((r for r in results if r.rank == -1 and r.title == "DeepSeek Summary"), None)
         if last_engine == "deepseek" and deepseek_summary_result and deepseek_summary_result.content:
             logger.info("DeepSeek 服务端已生成完整解答，直接返回并跳过本地 LLM 二次总结")
             answer = deepseek_summary_result.content.strip()
