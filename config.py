@@ -164,7 +164,7 @@ class EnginesSection(PluginConfigBase):
     tavily_turbo: bool = Field(default=False, description="是否启用 Tavily Turbo 模式")
 
     # AnySearch
-    anysearch_enabled: bool = Field(default=False, description="是否启用 AnySearch 搜索")
+    anysearch_enabled: bool = Field(default=True, description="是否启用 AnySearch 搜索")
     anysearch_api_keys: list[str] = Field(
         default_factory=list,
         description="AnySearch API key 列表，每项一把密钥；多个密钥随机尝试，留空使用匿名请求",
