@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
+from io import BytesIO
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+from PIL import Image
 
 # 明确过滤的追踪查询参数（保持返回给 Planner / ContentFetcher 的 URL 干净）
 _TRACKING_QUERY_KEYS = frozenset(
@@ -79,7 +82,7 @@ class ReverseImageOutput:
 
     @property
     def has_useful_data(self) -> bool:
-        return bool(self.matches or self.ai_overview.strip())
+        return bool(self.matches or self.ai_overview.strip() or self.tags)
 
 
 def compute_image_hash(image_bytes: bytes) -> str:
@@ -87,8 +90,8 @@ def compute_image_hash(image_bytes: bytes) -> str:
     return hashlib.sha256(image_bytes).hexdigest()
 
 
-def detect_image_mime_and_ext(image_bytes: bytes, content_type: str = "") -> tuple[str, str]:
-    """根据文件魔数（优先）或 Content-Type 推断图片 MIME 类型与扩展名。"""
+def detect_image_mime_and_ext(image_bytes: bytes) -> tuple[str, str]:
+    """根据文件头识别格式；不相信服务器对未知内容的类型声明。"""
     if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png", "png"
     if image_bytes.startswith(b"\xff\xd8\xff"):
@@ -100,16 +103,24 @@ def detect_image_mime_and_ext(image_bytes: bytes, content_type: str = "") -> tup
     if image_bytes.startswith(b"BM"):
         return "image/bmp", "bmp"
 
-    ct = (content_type or "").split(";", 1)[0].strip().lower()
-    mapping = {
-        "image/png": ("image/png", "png"),
-        "image/jpeg": ("image/jpeg", "jpg"),
-        "image/jpg": ("image/jpeg", "jpg"),
-        "image/gif": ("image/gif", "gif"),
-        "image/webp": ("image/webp", "webp"),
-        "image/bmp": ("image/bmp", "bmp"),
-    }
-    return mapping.get(ct, ("image/jpeg", "jpg"))
+    if image_bytes[4:8] == b"ftyp" and image_bytes[8:12] in {b"avif", b"avis"}:
+        return "image/avif", "avif"
+    return "", ""
+
+
+def verify_image_data(data: bytes) -> str:
+    """读取受支持的栅格图片，拒绝错误页面、损坏的文件和超大画布。"""
+    mime, _ = detect_image_mime_and_ext(data)
+    if not mime:
+        raise ValueError("不是支持的图片格式")
+    try:
+        with Image.open(BytesIO(data)) as picture:
+            if picture.width * picture.height > 64_000_000:
+                raise ValueError("图片像素过多")
+            picture.verify()
+    except (OSError, SyntaxError, Image.DecompressionBombError) as exc:
+        raise ValueError("无法读取图片文件") from exc
+    return mime
 
 
 def normalize_match_url(url: str) -> str:

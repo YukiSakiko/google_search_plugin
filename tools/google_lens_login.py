@@ -62,7 +62,7 @@ def main() -> int:
 
     Path(profile_dir).mkdir(parents=True, exist_ok=True)
     print(f"持久化目录: {profile_dir}")
-    print(f"代理地址:   {proxy or '(未使用代理)'}")
+    print("代理：已配置" if proxy else "代理：未启用")
     print(f"浏览器内核: {channel}")
 
     candidates = [None] if channel == "chromium" else ([channel, None] if channel in {"chrome", "msedge"} else ["chrome", "msedge", None])
@@ -102,7 +102,7 @@ def main() -> int:
         finally:
             context.close()
 
-    print("登录态已保存至持久化目录，现在可以正常启动 MaiBot 使用 Google Lens 以图搜图。")
+    print("浏览器窗口已关闭。下次识图将复用此目录，是否已登录取决于窗口中的实际操作。")
     return 0
 
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import time
 from typing import Any, ClassVar, Mapping, Optional
 
 from maibot_sdk import Command, ConfigWidget, ConfigWidgetState, MaiBotPlugin, Tool
@@ -26,7 +27,8 @@ from .pipelines.content_fetcher import ContentFetcher
 from .pipelines.engine_chain import EngineChain
 from .pipelines.image_search_pipeline import ImageSearchPipeline
 from .pipelines.llm_runner import LLMRunner
-from .pipelines.reverse_image_pipeline import ReverseImagePipeline
+from .pipelines.public_fetch import MAX_IMAGE_BYTES
+from .pipelines.reverse_image_pipeline import ReverseImagePipeline, reverse_rpc_budget
 from .pipelines.search_pipeline import SearchPipeline
 from .pipelines.url_pipeline import UrlPipeline, is_url
 from .pipelines.zhihu_extractor import ZhihuExtractor
@@ -58,7 +60,7 @@ class GoogleSearchPlugin(MaiBotPlugin):
             id="google_lens_login_reset",
             kind="action",
             label="清除本地登录态 / 重置冷却",
-            confirmation="将清空插件专用的 Google Lens 持久化目录并重置风控冷却，是否继续？",
+            confirmation="将清除插件自己创建的默认浏览器资料并重置冷却时间。自定义目录和旧目录不会删除。是否继续？",
         ),
     ]
 
@@ -114,11 +116,11 @@ class GoogleSearchPlugin(MaiBotPlugin):
             status_text = snap["message"]
             tone = "success"
         elif has_cookies:
-            status_text = "已通过配置项填写 Google Lens Cookie（无头服务器模式就绪）。"
-            tone = "success"
+            status_text = snap["message"] or "已填写 Google 登录信息，尚未验证账号状态。"
+            tone = "neutral"
         elif has_profile:
-            status_text = f"已就绪（复用本地持久化登录目录：{profile_dir}）。"
-            tone = "success"
+            status_text = snap["message"] or f"已找到本地浏览器资料，尚未确认账号登录状态：{profile_dir}"
+            tone = "neutral"
         else:
             status_text = (
                 snap["message"]
@@ -294,7 +296,6 @@ class GoogleSearchPlugin(MaiBotPlugin):
 
     _WEB_SEARCH_RPC_FLOOR_SECONDS = 180
     _WEB_SEARCH_NON_LLM_BUDGET_SECONDS = 120
-    _REVERSE_IMAGE_RPC_FLOOR_SECONDS = 120
 
     def _web_search_rpc_timeout_ms(self) -> int:
         """整体超时 = 单次 LLM 上限 + 搜索/抓取预算,下限 180s。"""
@@ -309,12 +310,12 @@ class GoogleSearchPlugin(MaiBotPlugin):
         return total_seconds * 1000
 
     def _reverse_image_rpc_timeout_ms(self) -> int:
-        """以图搜图可能串联多引擎（含冷启动浏览器），给予足够 RPC 预算。"""
+        """为已启用引擎的串行回退、读图和返回结果留足时间。"""
         try:
-            search_timeout = int(self.config.search_backend.timeout or 20)
-        except Exception:  # noqa: BLE001
-            search_timeout = 20
-        return max(self._REVERSE_IMAGE_RPC_FLOOR_SECONDS, search_timeout * 4) * 1000
+            cfg = self.config
+        except RuntimeError:
+            cfg = GoogleSearchPluginConfig()
+        return reverse_rpc_budget(cfg.reverse_image, cfg.search_backend) * 1000
 
     async def _sync_component_states(self) -> None:
         """按当前配置热切换可开关组件的启用状态。
@@ -613,8 +614,8 @@ class GoogleSearchPlugin(MaiBotPlugin):
             self.ctx.logger.error("图片搜索工具异常: %s", exc, exc_info=True)
             return {"name": "image_search", "success": False, "content": f"图片搜索失败：{exc}"}
 
-        if status == "ok" and b64:
-            effective_mime = mime_type or "image/jpeg"
+        if status == "ok" and b64 and mime_type:
+            effective_mime = mime_type
             ext = effective_mime.split("/", 1)[-1].replace("jpeg", "jpg") or "jpg"
             self.ctx.logger.info("图片搜索成功 url=%s mime=%s", url, effective_mime)
             return {
@@ -716,34 +717,32 @@ class GoogleSearchPlugin(MaiBotPlugin):
             image_index = kwargs["index"]
         del kwargs
 
+        def failure(message: str) -> dict[str, Any]:
+            return {"name": "reverse_image_search", "success": False, "content": message, "error": message}
+
         if not self.config.reverse_image.enabled:
-            return {"name": "reverse_image_search", "success": False, "content": "以图搜图功能未启用"}
+            return failure("以图搜图功能未启用")
 
         if not isinstance(image_index, int) or isinstance(image_index, bool) or image_index < 0:
-            return {"name": "reverse_image_search", "success": False, "content": "image_index 必须是非负整数。"}
+            return failure("图片序号必须是非负整数。")
 
         cleaned_url = (image_url or "").strip()
+        if source_id and cleaned_url:
+            return failure("聊天图片和图片链接只能选一个。")
         if not source_id and not cleaned_url:
-            return {
-                "name": "reverse_image_search",
-                "success": False,
-                "content": "请提供图片所在消息编号 msg_id 或图片链接 image_url。",
-            }
+            return failure("请提供图片所在的消息编号或图片链接。")
 
         if not self._ensure_pipelines_ready():
-            return {"name": "reverse_image_search", "success": False, "content": "以图搜图组件未就绪"}
+            return failure("以图搜图组件未就绪")
 
+        started = time.perf_counter()
         image_bytes: Optional[bytes] = None
         image_hash = ""
 
         if source_id:
             normalized_stream_id = (stream_id or "").strip()
             if not normalized_stream_id:
-                return {
-                    "name": "reverse_image_search",
-                    "success": False,
-                    "content": "缺少当前会话上下文 stream_id，无法按 msg_id 读取聊天图片。",
-                }
+                return failure("缺少当前会话信息，无法按消息编号读取图片。")
             try:
                 resolved = await self.ctx.maisaka.context.resolve_image(
                     normalized_stream_id,
@@ -752,42 +751,29 @@ class GoogleSearchPlugin(MaiBotPlugin):
                 )
             except Exception as exc:  # noqa: BLE001
                 self.ctx.logger.error("读取上下文图片失败: %s", exc, exc_info=True)
-                return {
-                    "name": "reverse_image_search",
-                    "success": False,
-                    "content": f"读取聊天图片失败：{exc}",
-                }
+                return failure("读取聊天图片失败，请查看插件日志。")
             if not isinstance(resolved, dict) or not resolved.get("success"):
                 err = resolved.get("error", "未知错误") if isinstance(resolved, dict) else str(resolved)
-                return {
-                    "name": "reverse_image_search",
-                    "success": False,
-                    "content": f"无法获取目标图片（{err}）。",
-                }
+                return failure(f"无法获取目标图片（{err}）。")
             image_payload = resolved.get("image") or {}
+            if not isinstance(image_payload, dict):
+                return failure("宿主返回的图片数据无效。")
             raw_b64 = str(image_payload.get("binary_data_base64") or "").strip()
             image_hash = str(image_payload.get("binary_hash") or "").strip()
             if not raw_b64:
-                return {
-                    "name": "reverse_image_search",
-                    "success": False,
-                    "content": "目标图片数据为空，无法识别。",
-                }
+                return failure("目标图片数据为空，无法识别。")
+            if len(raw_b64) > 4 * ((MAX_IMAGE_BYTES + 2) // 3):
+                return failure("图片超过 15 MiB。")
             try:
-                image_bytes = base64.b64decode(raw_b64)
-            except Exception as exc:  # noqa: BLE001
-                return {
-                    "name": "reverse_image_search",
-                    "success": False,
-                    "content": f"目标图片 Base64 解码失败：{exc}",
-                }
+                image_bytes = base64.b64decode(raw_b64, validate=True)
+            except ValueError:
+                return failure("无法解码宿主返回的图片数据。")
 
         try:
             self.ctx.logger.info(
-                "开始以图搜图 (source_id=%s, index=%d, has_url=%s)",
-                source_id or "-",
-                image_index,
-                bool(cleaned_url),
+                "开始以图搜图（%s，准备输入 %.3f 秒）",
+                "聊天图片" if source_id else "图片链接",
+                time.perf_counter() - started,
             )
             content = await self._reverse_image_pipeline.run(  # type: ignore[union-attr]
                 image_bytes=image_bytes,
@@ -795,9 +781,13 @@ class GoogleSearchPlugin(MaiBotPlugin):
                 image_hash=image_hash,
             )
             return {"name": "reverse_image_search", "success": True, "content": content}
+        except ValueError as exc:
+            return failure(f"以图搜图失败：{exc}")
         except Exception as exc:  # noqa: BLE001
             self.ctx.logger.error("reverse_image_search 执行异常: %s", exc, exc_info=True)
-            return {"name": "reverse_image_search", "success": False, "content": f"以图搜图执行失败：{exc}"}
+            return failure("以图搜图执行失败，请查看插件日志。")
+        finally:
+            self.ctx.logger.info("以图搜图调用结束，总耗时 %.3f 秒", time.perf_counter() - started)
 
     # ---------------------------------------------------------------- #
     # 诊断命令

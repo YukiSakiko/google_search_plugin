@@ -9,7 +9,7 @@ import unittest
 import warnings
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(_PROJECT_ROOT) not in sys.path:
@@ -25,7 +25,6 @@ from plugins.google_search_plugin.pipelines.reverse_image_pipeline import (  # n
     format_reverse_image_output,
 )
 from plugins.google_search_plugin.plugin import GoogleSearchPlugin  # noqa: E402
-from plugins.google_search_plugin.search_engines.base import SearchResult  # noqa: E402
 from plugins.google_search_plugin.search_engines.reverse_image.base import (  # noqa: E402
     ReverseImageMatch,
     ReverseImageOutput,
@@ -43,7 +42,7 @@ from plugins.google_search_plugin.search_engines.reverse_image.google_lens impor
 from plugins.google_search_plugin.search_engines.reverse_image.yandex_visual import YandexVisualEngine  # noqa: E402
 
 _PLUGIN_DIR = Path(__file__).resolve().parents[1]
-_FAKE_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+_FAKE_PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC")
 
 
 class Issue56MigrationTests(unittest.IsolatedAsyncioTestCase):
@@ -291,18 +290,7 @@ class ReverseImagePipelineTests(unittest.IsolatedAsyncioTestCase):
         pipeline.bing.search.assert_not_awaited()
 
     async def test_optional_content_fetcher_enriches_top_matches(self) -> None:
-        fetcher = SimpleNamespace(
-            fetch_batch=AsyncMock(
-                return_value=[
-                    SearchResult(
-                        title="梗鲸",
-                        url="https://aigengtu.com/zh/meme/2293",
-                        snippet="",
-                        content="这是抓取到的网页正文介绍。",
-                    )
-                ]
-            )
-        )
+        fetcher = SimpleNamespace(fetch_public_excerpt=AsyncMock(return_value="这是抓取到的网页正文介绍。"))
         pipeline = ReverseImagePipeline(
             reverse_cfg=ReverseImageSection(fetch_content=True, google_lens_enabled=False, bing_enabled=False),
             backend_cfg=SearchBackendSection(),
@@ -318,7 +306,7 @@ class ReverseImagePipelineTests(unittest.IsolatedAsyncioTestCase):
         )
 
         text = await pipeline.run(image_bytes=_FAKE_PNG)
-        fetcher.fetch_batch.assert_awaited_once()
+        fetcher.fetch_public_excerpt.assert_awaited_once_with("https://aigengtu.com/zh/meme/2293")
         self.assertIn("这是抓取到的网页正文介绍。", text)
 
     async def test_plugin_handle_reverse_image_search_resolves_maisaka_context_image(self) -> None:

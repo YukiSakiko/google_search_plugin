@@ -17,6 +17,8 @@ import logging
 import re
 import shutil
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal, Optional
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -38,6 +40,37 @@ _LENS_UPLOAD_URL = "https://lens.google.com/v3/upload"
 _CONSENT_COOKIE = "YES+cb.20220419-08-p0.cs+FX+111"
 _GOOGLE_AUTH_COOKIE_NAMES = frozenset({"SID", "HSID", "SSID", "SAPISID", "__Secure-1PSID", "__Secure-3PSID"})
 _LOGIN_MAX_WAIT_SECONDS = 15 * 60
+_PROFILE_MARKER = ".maibot-lens-owner"
+_PROFILE_SIGNATURE = b"google_search_plugin/lens/v1\n"
+
+
+@contextmanager
+def _measure(timings: dict[str, float], stage: str) -> Iterator[None]:
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        timings[stage] = round(time.perf_counter() - started, 3)
+
+
+async def _close_handles(context: Any, browser: Any, driver: Any) -> None:
+    if context is None and browser is None and driver is None:
+        return
+
+    async def close() -> None:
+        for handle, method in ((context, "close"), (browser, "close"), (driver, "stop")):
+            if handle is not None:
+                try:
+                    await getattr(handle, method)()
+                except Exception as exc:
+                    logger.debug("关闭浏览器资源：%s", type(exc).__name__)
+
+    cleanup = asyncio.create_task(close())
+    try:
+        await asyncio.shield(cleanup)
+    except asyncio.CancelledError:
+        await cleanup
+        raise
 
 LoginState = Literal["idle", "starting", "waiting", "saving", "logged_in", "error"]
 
@@ -120,6 +153,8 @@ class GoogleLensReverseEngine:
         self.captcha_cooldown_seconds = max(int(captcha_cooldown_seconds or 0), 0)
 
         self._lock = asyncio.Lock()
+        self._closed = False
+        self._driver_cleanups: set[asyncio.Task[None]] = set()
         self._playwright: Any = None
         self._browser: Any = None
         self._context: Any = None
@@ -158,10 +193,13 @@ class GoogleLensReverseEngine:
             max_redirects=0,
             timeout=self.timeout * 1000,
         )
-        loc = str(resp.headers.get("location") or "").strip()
-        if resp.status in (301, 302, 303, 307, 308) and loc:
-            return _ensure_hl_param(loc, self.language), ""
-        return "", f"Google Lens 上传未返回跳转地址 (HTTP {resp.status})"
+        try:
+            loc = str(resp.headers.get("location") or "").strip()
+            if resp.status in (301, 302, 303, 307, 308) and loc:
+                return _ensure_hl_param(loc, self.language), ""
+            return "", f"Google Lens 上传未返回跳转地址 (HTTP {resp.status})"
+        finally:
+            await resp.dispose()
 
     def _candidate_channels(self) -> list[Optional[str]]:
         if self.browser_channel == "chromium":
@@ -171,17 +209,35 @@ class GoogleLensReverseEngine:
         # auto: 优先系统 Chrome，回退 Edge 与 Playwright 内置 Chromium
         return ["chrome", "msedge", None]
 
+    async def _start_driver(self) -> Any:
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError as exc:
+            raise RuntimeError("当前 Python 环境未安装 playwright") from exc
+        startup = asyncio.create_task(async_playwright().start())
+        try:
+            return await asyncio.shield(startup)
+        except asyncio.CancelledError:
+            # 驱动进程可能已经创建，但 start 还没交回句柄。让本次搜索立即返回，
+            # 等句柄到达后仅关闭这个驱动，不接触下一次请求创建的浏览器。
+            async def finish_startup() -> None:
+                try:
+                    driver = await startup
+                    await driver.stop()
+                except Exception as exc:
+                    logger.debug("清理已取消的浏览器启动：%s", type(exc).__name__)
+
+            cleanup = asyncio.create_task(finish_startup())
+            self._driver_cleanups.add(cleanup)
+            cleanup.add_done_callback(self._driver_cleanups.discard)
+            raise
+
     async def _ensure_context(self) -> Any:
         """懒加载并复用 Playwright Context（支持持久化 Profile 与 Cookie 注入）。"""
         if self._context is not None:
             return self._context
 
-        try:
-            from playwright.async_api import async_playwright
-        except ImportError as exc:
-            raise RuntimeError("当前 Python 环境未安装 playwright") from exc
-
-        self._playwright = await async_playwright().start()
+        self._playwright = await self._start_driver()
         proxy_cfg = {"server": self.proxy} if self.proxy else None
         launch_args = ["--disable-blink-features=AutomationControlled"]
 
@@ -198,7 +254,7 @@ class GoogleLensReverseEngine:
 
             try:
                 if self.profile_dir:
-                    Path(self.profile_dir).mkdir(parents=True, exist_ok=True)
+                    self._prepare_profile(Path(self.profile_dir))
                     self._context = await self._playwright.chromium.launch_persistent_context(
                         user_data_dir=self.profile_dir,
                         locale=self.language,
@@ -225,7 +281,7 @@ class GoogleLensReverseEngine:
                 continue
 
         if self._context is None:
-            await self.aclose()
+            await self._close_search_browser()
             raise RuntimeError(f"无法启动 Playwright 浏览器: {last_error}")
 
         await self._inject_cookies_once()
@@ -282,8 +338,16 @@ class GoogleLensReverseEngine:
         except Exception:
             pass
 
-        # 给异步 AI 概览 (/async/folsrch) 一个短窗口完成首屏渲染
-        await asyncio.sleep(1.5)
+        # 概览已经显示时直接提取，否则保留原来 1.5 秒的等待窗口。
+        try:
+            await page.wait_for_function(
+                """noise => (document.querySelector('[data-scope-id="turn"]')?.innerText || '')
+                    .split('\\n').some(s => s.trim().length >= 8 && !noise.includes(s.trim()))""",
+                arg=sorted(_AIO_NOISE_LINES),
+                timeout=1500,
+            )
+        except Exception:
+            pass
 
         payload = await page.evaluate(
             """(limit) => {
@@ -329,7 +393,9 @@ class GoogleLensReverseEngine:
         return cleaned_matches, ai_overview
 
     def is_login_active(self) -> bool:
-        return self._login_state in {"starting", "waiting", "saving"}
+        return self._login_state in {"starting", "waiting", "saving"} or bool(
+            self._login_task and not self._login_task.done()
+        )
 
     def cooldown_remaining_seconds(self) -> int:
         remaining = int(self._captcha_cooldown_until - time.time())
@@ -337,6 +403,40 @@ class GoogleLensReverseEngine:
 
     def login_target_profile_dir(self) -> str:
         return self.profile_dir or self._default_profile_dir
+
+    def _is_default_profile(self, path: Path) -> bool:
+        if not self._default_profile_dir:
+            return False
+        default = Path(self._default_profile_dir)
+        # 自定义目录、别名、符号链接和 Windows 目录联接均不作为删除目标。
+        return (
+            path.absolute() == default.absolute()
+            and not path.is_symlink()
+            and path.resolve() == default.parent.resolve() / default.name
+        )
+
+    def _prepare_profile(self, path: Path) -> None:
+        try:
+            path.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            if not path.is_dir():
+                raise
+            return
+        if self._is_default_profile(path):
+            with (path / _PROFILE_MARKER).open("xb") as marker:
+                marker.write(_PROFILE_SIGNATURE)
+
+    def _remove_owned_profile(self, path: Path) -> bool:
+        if not self._is_default_profile(path):
+            return False
+        marker = path / _PROFILE_MARKER
+        if not marker.is_file() or marker.is_symlink():
+            return False
+        with marker.open("rb") as source:
+            if source.read(len(_PROFILE_SIGNATURE) + 1) != _PROFILE_SIGNATURE:
+                return False
+        shutil.rmtree(path)
+        return True
 
     def has_saved_profile(self) -> bool:
         target = self.login_target_profile_dir()
@@ -350,7 +450,10 @@ class GoogleLensReverseEngine:
             root / "Default" / "Cookies",
             root / "Local State",
         )
-        return any(path.is_file() and path.stat().st_size > 0 for path in candidates)
+        try:
+            return any(path.is_file() and path.stat().st_size > 0 for path in candidates)
+        except OSError:
+            return False
 
     def get_login_snapshot(self) -> dict[str, Any]:
         return {
@@ -376,22 +479,28 @@ class GoogleLensReverseEngine:
 
         # 释放可能占用同一 user_data_dir 的无头搜索上下文
         try:
-            async with asyncio.timeout(2.5):
-                async with self._lock:
-                    await self._close_search_browser()
+            await asyncio.wait_for(self._lock.acquire(), timeout=2.5)
         except TimeoutError:
             self._login_state = "error"
             self._login_message = "当前有以图搜图请求正在执行，请稍后再点击打开登录窗口。"
             return
 
-        self._login_state = "starting"
-        self._login_message = "正在启动本机浏览器登录窗口..."
-        self._login_started_event = asyncio.Event()
-        self._login_done_event = asyncio.Event()
-        self._login_task = asyncio.create_task(
-            self._run_interactive_login(target_dir),
-            name="google-lens-webui-login",
-        )
+        try:
+            if self._closed or self.is_login_active():
+                return
+            await self._close_search_browser()
+            if self._closed:
+                return
+            self._login_state = "starting"
+            self._login_message = "正在启动本机浏览器登录窗口..."
+            self._login_started_event = asyncio.Event()
+            self._login_done_event = asyncio.Event()
+            self._login_task = asyncio.create_task(
+                self._run_interactive_login(target_dir),
+                name="google-lens-webui-login",
+            )
+        finally:
+            self._lock.release()
 
         # 短暂等待启动结果（最多 2.5s），让 WebUI 首屏就能看到“窗口已打开”或明确的报错提示
         try:
@@ -404,13 +513,8 @@ class GoogleLensReverseEngine:
         context: Any = None
         detected_auth = False
         try:
-            try:
-                from playwright.async_api import async_playwright
-            except ImportError as exc:
-                raise RuntimeError("当前 Python 环境未安装 playwright") from exc
-
-            Path(target_dir).mkdir(parents=True, exist_ok=True)
-            pw = await async_playwright().start()
+            self._prepare_profile(Path(target_dir))
+            pw = await self._start_driver()
             self._login_playwright = pw
 
             proxy_cfg = {"server": self.proxy} if self.proxy else None
@@ -488,29 +592,17 @@ class GoogleLensReverseEngine:
         finally:
             ctx_to_close, self._login_context = self._login_context, None
             pw_to_stop, self._login_playwright = self._login_playwright, None
-            if ctx_to_close is not None:
-                try:
-                    await ctx_to_close.close()
-                except Exception:
-                    pass
-            if pw_to_stop is not None:
-                try:
-                    await pw_to_stop.stop()
-                except Exception:
-                    pass
+            await _close_handles(ctx_to_close, None, pw_to_stop)
 
         # 登录成功后确保搜索端启用该持久化目录并清空风控冷却
         self.profile_dir = target_dir
-        self._captcha_cooldown_until = 0.0
-        if detected_auth or self.has_saved_profile():
+        if detected_auth:
+            self._captcha_cooldown_until = 0.0
             self._login_state = "logged_in"
-            if detected_auth:
-                self._login_message = "已检测到 Google 账号登录态并保存至本地目录，Google Lens 已就绪。"
-            else:
-                self._login_message = "浏览器窗口已关闭，本地持久化目录已更新；如未完成登录可再次点击打开。"
+            self._login_message = "已检测到 Google 账号登录信息并保存至本地目录。"
         else:
             self._login_state = "idle"
-            self._login_message = "浏览器窗口已关闭，尚未检测到保存的登录态。"
+            self._login_message = "浏览器窗口已关闭，尚未确认是否已登录 Google 账号。"
 
     @staticmethod
     def _format_headed_launch_error(exc: Optional[Exception]) -> str:
@@ -536,38 +628,43 @@ class GoogleLensReverseEngine:
 
     async def reset_login_state(self) -> None:
         """清除本地持久化目录与风控冷却状态。"""
-        await self._stop_interactive_login()
         async with self._lock:
+            if self._closed:
+                return
+            await self._stop_interactive_login()
             await self._close_search_browser()
-        self._captcha_cooldown_until = 0.0
-        target_dir = self.login_target_profile_dir()
-        if target_dir and Path(target_dir).exists():
-            await asyncio.to_thread(shutil.rmtree, target_dir, True)
-        self._login_state = "idle"
-        self._login_message = "已清除本地登录目录并重置风控冷却。"
+            self._captcha_cooldown_until = 0.0
+            self._login_state = "idle"
+            self._login_message = "已重置冷却时间。"
+            target_dir = self.login_target_profile_dir()
+            if target_dir and Path(target_dir).exists():
+                cleanup = asyncio.create_task(asyncio.to_thread(self._remove_owned_profile, Path(target_dir)))
+                try:
+                    removed = await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    await cleanup
+                    raise
+                except OSError as exc:
+                    self._login_state = "error"
+                    self._login_message = f"未能清除浏览器资料目录：{exc}"
+                    raise
+                self._login_message = (
+                    "已清除插件创建的浏览器资料并重置冷却时间。"
+                    if removed else "已重置冷却时间。该目录不是插件创建的专用目录，已保留其中的资料。"
+                )
 
     async def _stop_interactive_login(self) -> None:
         if self._login_done_event is not None:
             self._login_done_event.set()
         task, self._login_task = self._login_task, None
         if task is not None and not task.done():
-            task.cancel()
-            try:
-                await asyncio.wait_for(task, timeout=3.0)
-            except (asyncio.CancelledError, TimeoutError, Exception):
-                pass
+            if self._login_state not in {"waiting", "saving"}:
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
-    async def search(
-        self,
-        *,
-        image_bytes: Optional[bytes] = None,
-        max_results: int = 8,
-    ) -> ReverseImageOutput:
-        """执行 Google Lens 反向以图搜图。"""
-        if not self.enabled:
-            return ReverseImageOutput(engine="google_lens", error="Google Lens 未启用")
-        if not image_bytes:
-            return ReverseImageOutput(engine="google_lens", error="缺少图片数据")
+    def _unavailable(self) -> Optional[ReverseImageOutput]:
+        if self._closed or not self.enabled:
+            return ReverseImageOutput(engine="google_lens", error="Google Lens 已关闭")
         if self.is_login_active():
             return ReverseImageOutput(
                 engine="google_lens",
@@ -581,48 +678,83 @@ class GoogleLensReverseEngine:
                 captcha_triggered=True,
                 error=f"Google Lens 处于风控冷却期（剩余 {remaining}s），已直接交由备用引擎",
             )
+        return None
 
+    async def search(
+        self,
+        *,
+        image_bytes: Optional[bytes] = None,
+        max_results: int = 8,
+    ) -> ReverseImageOutput:
+        """执行 Google Lens 反向以图搜图。"""
+        if not image_bytes:
+            return ReverseImageOutput(engine="google_lens", error="缺少图片数据")
+        if unavailable := self._unavailable():
+            return unavailable
+        started = time.perf_counter()
         async with self._lock:
+            if unavailable := self._unavailable():
+                return unavailable
+            timings = {"排队": round(time.perf_counter() - started, 3)}
+            cold = self._context is None
+            ready = False
             page: Any = None
             try:
-                context = await self._ensure_context()
-                vsrid_url, upload_err = await self._upload_for_vsrid_url(context, image_bytes)
+                with _measure(timings, "浏览器就绪"):
+                    context = await self._ensure_context()
+                    ready = True
+                with _measure(timings, "上传"):
+                    vsrid_url, upload_err = await self._upload_for_vsrid_url(context, image_bytes)
                 if upload_err or not vsrid_url:
                     return ReverseImageOutput(engine="google_lens", error=upload_err or "上传未拿到结果地址")
 
-                page = await context.new_page()
-                await page.goto(vsrid_url, wait_until="domcontentloaded", timeout=self.timeout * 1000)
-
-                current_url = str(page.url or "")
-                html_head = (await page.content())[:12000]
+                with _measure(timings, "导航"):
+                    page = await context.new_page()
+                    await page.goto(vsrid_url, wait_until="domcontentloaded", timeout=self.timeout * 1000)
+                    current_url = str(page.url or "")
+                    html_head = await page.evaluate("document.documentElement.outerHTML.slice(0, 12000)")
                 if self._is_sorry_page(current_url, html_head):
                     if self.captcha_cooldown_seconds > 0:
                         self._captcha_cooldown_until = time.time() + self.captcha_cooldown_seconds
-                    logger.warning("Google Lens 命中风控/验证码页 (%s)，自动交由备用引擎降级", current_url[:100])
+                    logger.warning("Google Lens 返回验证码，改用备用引擎")
                     return ReverseImageOutput(
                         engine="google_lens",
                         captcha_triggered=True,
                         error="Google Lens 触发风控/人机验证，请检查登录态或稍后重试",
                     )
 
-                matches, ai_overview = await self._extract_from_page(page, max_results=max_results)
+                with _measure(timings, "提取"):
+                    matches, ai_overview = await self._extract_from_page(page, max_results=max_results)
                 return ReverseImageOutput(
                     engine="google_lens",
                     matches=matches,
                     ai_overview=ai_overview,
                 )
+            except asyncio.CancelledError:
+                if cold and not ready:
+                    await self._close_search_browser()
+                raise
             except Exception as exc:  # noqa: BLE001
-                logger.warning("Google Lens Playwright 提取异常: %s", exc)
+                logger.warning("Google Lens 搜索失败：%s", type(exc).__name__)
                 # 浏览器上下文异常断开时重置，确保下次调用能自动恢复
                 if "closed" in str(exc).lower() or "target" in str(exc).lower():
                     await self._close_search_browser()
-                return ReverseImageOutput(engine="google_lens", error=str(exc))
+                reason = (
+                    "当前麦麦环境未安装 Playwright"
+                    if isinstance(exc.__cause__, ImportError)
+                    else f"浏览器搜索失败：{type(exc).__name__}"
+                )
+                return ReverseImageOutput(engine="google_lens", error=reason)
             finally:
                 if page is not None:
                     try:
                         await page.close()
                     except Exception:
                         pass
+                logger.info(
+                    "Google Lens 耗时：%s，阶段（秒）=%s，总计=%.3fs",
+                    "冷启动" if cold else "复用浏览器", timings, time.perf_counter() - started,
+                )
 
     async def _close_search_browser(self) -> None:
         """仅关闭无头/搜索用 Playwright 上下文。"""
@@ -631,23 +763,13 @@ class GoogleLensReverseEngine:
         pw, self._playwright = self._playwright, None
         self._cookies_injected = False
 
-        if ctx is not None:
-            try:
-                await ctx.close()
-            except Exception:
-                pass
-        if browser is not None:
-            try:
-                await browser.close()
-            except Exception:
-                pass
-        if pw is not None:
-            try:
-                await pw.stop()
-            except Exception:
-                pass
+        await _close_handles(ctx, browser, pw)
 
     async def aclose(self) -> None:
         """释放所有 Playwright 浏览器资源（含搜索上下文与交互式登录窗口）。"""
-        await self._stop_interactive_login()
-        await self._close_search_browser()
+        self._closed = True
+        async with self._lock:
+            await self._stop_interactive_login()
+            await self._close_search_browser()
+        if self._driver_cleanups:
+            await asyncio.gather(*list(self._driver_cleanups))

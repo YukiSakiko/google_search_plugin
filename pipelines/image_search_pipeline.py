@@ -16,14 +16,13 @@ import time
 from collections import deque
 from typing import TYPE_CHECKING, Literal, Optional
 
-import aiohttp
-
 from ..search_engines.bing import BingEngine
 from ..search_engines.duckduckgo import DuckDuckGoEngine
-from ..search_engines.reverse_image.base import detect_image_mime_and_ext
+from ..search_engines.reverse_image.base import verify_image_data
 from ..search_engines.sogou import SogouEngine
 from ..search_engines.you import YouImagesEngine
 from .engine_chain import _build_common_cfg, _build_engine_dict
+from .public_fetch import MAX_IMAGE_BYTES, fetch_public_resource
 
 if TYPE_CHECKING:
     from ..config import EnginesSection, SearchBackendSection
@@ -146,16 +145,18 @@ class ImageSearchPipeline:
         random.shuffle(candidates)
 
         # ---- 3. 依次下载 ---- #
-        async with aiohttp.ClientSession(trust_env=True) as session:
-            for url in candidates:
-                if not url:
-                    continue
-                image_data = await self._fetch_image(session, url)
-                if image_data:
-                    mime_type, _ = detect_image_mime_and_ext(image_data)
-                    b64 = base64.b64encode(image_data).decode("utf-8")
-                    history.append((url, time.time()))
-                    return ("ok", b64, url, mime_type)
+        for url in candidates:
+            try:
+                resource = await fetch_public_resource(
+                    url, proxy=self._backend_cfg.proxy, timeout=10, max_bytes=MAX_IMAGE_BYTES,
+                )
+                mime_type = await asyncio.to_thread(verify_image_data, resource.body)
+            except (OSError, ValueError) as exc:
+                logger.debug("跳过不可用的候选图片: %s", type(exc).__name__)
+                continue
+            b64 = base64.b64encode(resource.body).decode("utf-8")
+            history.append((url, time.time()))
+            return ("ok", b64, url, mime_type)
         return ("all_failed", None, None, "")
 
     # ------------------------------------------------------------------ #
@@ -203,15 +204,3 @@ class ImageSearchPipeline:
                 continue
 
         return []
-
-    @staticmethod
-    async def _fetch_image(session: aiohttp.ClientSession, url: str) -> Optional[bytes]:
-        try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                if response.status == 200:
-                    return await response.read()
-        except asyncio.TimeoutError:
-            logger.warning("下载图片超时: %s", url)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("下载图片失败 %s: %s", url, exc)
-        return None

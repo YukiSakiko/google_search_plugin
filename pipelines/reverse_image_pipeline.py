@@ -9,15 +9,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Awaitable, Optional
 
-import aiohttp
-
-from ..search_engines.base import SearchResult
+from .public_fetch import MAX_IMAGE_BYTES, fetch_public_resource
+from ..search_engines.reverse_image.base import verify_image_data
 from ..search_engines.reverse_image import (
     BingVisualEngine,
     GoogleLensReverseEngine,
@@ -34,9 +34,37 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_MAX_IMAGE_DOWNLOAD_BYTES = 15 * 1024 * 1024  # 15 MiB
 _MAX_CACHE_ENTRIES = 128
+_URL_CACHE_MAX_SECONDS = 60
 _DEFAULT_PROFILE_DIR = Path(__file__).resolve().parent.parent / ".google_lens_profile"
+
+
+def _stage_limits(search_timeout: int) -> tuple[int, int, int]:
+    timeout = max(search_timeout, 10)
+    # Lens: upload + navigation + rendering (up to 12s), plus bounded startup/queue time.
+    return 2 * max(timeout, 25) + 12 + 15, 2 * timeout + 3, timeout + 3
+
+
+def reverse_rpc_budget(cfg: "ReverseImageSection", backend: "SearchBackendSection") -> int:
+    lens, yandex, bing = _stage_limits(backend.timeout)
+    download = max(backend.content_timeout, 10)
+    stages = (
+        (lens if cfg.google_lens_enabled else 0)
+        + (yandex if cfg.yandex_enabled else 0)
+        + (bing if cfg.bing_enabled else 0)
+    )
+    return max(120, 15 + download + stages + (download if cfg.fetch_content else 0))
+
+
+async def _run_stage(engine: str, seconds: int, call: Awaitable[ReverseImageOutput]) -> ReverseImageOutput:
+    started = time.monotonic()
+    try:
+        async with asyncio.timeout(seconds):
+            return await call
+    except TimeoutError:
+        return ReverseImageOutput(engine=engine, error=f"{engine} 超过 {seconds} 秒仍未完成")
+    finally:
+        logger.info("以图搜图阶段 engine=%s elapsed_ms=%.0f", engine, (time.monotonic() - started) * 1000)
 
 _ENGINE_LABELS = {
     "google_lens": "Google Lens",
@@ -159,7 +187,7 @@ class ReverseImagePipeline:
             return f"{primary.strip().lower()}-{region.strip().upper()}"
         return cleaned or "zh-CN"
 
-    def _get_cached(self, cache_key: str) -> Optional[str]:
+    def _get_cached(self, cache_key: str, max_age: int | None = None) -> Optional[str]:
         ttl = int(self._cfg.cache_ttl_seconds or 0)
         if ttl <= 0 or not cache_key:
             return None
@@ -167,7 +195,7 @@ class ReverseImagePipeline:
         if entry is None:
             return None
         ts, text = entry
-        if time.time() - ts > ttl:
+        if time.monotonic() - ts >= (ttl if max_age is None else min(ttl, max_age)):
             self._cache.pop(cache_key, None)
             return None
         self._cache.move_to_end(cache_key)
@@ -177,61 +205,29 @@ class ReverseImagePipeline:
         ttl = int(self._cfg.cache_ttl_seconds or 0)
         if ttl <= 0 or not cache_key or not text:
             return
-        self._cache[cache_key] = (time.time(), text)
+        self._cache[cache_key] = (time.monotonic(), text)
         self._cache.move_to_end(cache_key)
         while len(self._cache) > _MAX_CACHE_ENTRIES:
             self._cache.popitem(last=False)
 
-    async def download_image_url(self, image_url: str) -> Optional[bytes]:
-        """下载公网图片 URL 的字节数据（受体积上限与超时保护）。"""
-        url = (image_url or "").strip()
-        if not url.startswith(("http://", "https://")):
-            return None
-        timeout = aiohttp.ClientTimeout(total=max(int(self._backend.content_timeout or 10), 10))
-        proxy = (self._backend.proxy or "").strip() or None
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-            )
-        }
-        try:
-            async with aiohttp.ClientSession(trust_env=True) as session:
-                async with session.get(url, headers=headers, timeout=timeout, proxy=proxy) as resp:
-                    if resp.status != 200:
-                        logger.warning("下载待识图片失败 %s (HTTP %d)", url, resp.status)
-                        return None
-                    chunks: list[bytes] = []
-                    total = 0
-                    async for chunk in resp.content.iter_chunked(65536):
-                        total += len(chunk)
-                        if total > _MAX_IMAGE_DOWNLOAD_BYTES:
-                            logger.warning("待识图片超过 15 MiB 上限，放弃下载: %s", url)
-                            return None
-                        chunks.append(chunk)
-                    return b"".join(chunks) if chunks else None
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("下载待识图片异常 %s: %s", url, exc)
-            return None
+    async def download_image_url(self, image_url: str) -> bytes:
+        response = await fetch_public_resource(
+            image_url, proxy=self._backend.proxy, timeout=max(int(self._backend.content_timeout or 10), 10),
+            max_bytes=MAX_IMAGE_BYTES,
+        )
+        return response.body
 
     async def _enrich_with_content_fetcher(self, output: ReverseImageOutput) -> None:
         """可选：抓取前 2 个关联页面的正文片段补充到结果中。"""
         if not self._cfg.fetch_content or self._fetcher is None or not output.matches:
             return
         top_matches = output.matches[:2]
-        search_results = [
-            SearchResult(title=m.title, url=m.url, snippet=m.snippet, rank=idx)
-            for idx, m in enumerate(top_matches)
-        ]
-        try:
-            enriched = await self._fetcher.fetch_batch(search_results, last_success_engine=output.engine)
-            for match, sr in zip(top_matches, enriched):
-                if sr.content:
-                    match.content = sr.content
-                elif sr.abstract and not match.snippet:
-                    match.snippet = sr.abstract
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("以图搜图正文补充失败（忽略并继续返回链接列表）: %s", exc)
+        excerpts = await asyncio.gather(
+            *(self._fetcher.fetch_public_excerpt(m.url) for m in top_matches), return_exceptions=True
+        )
+        for match, excerpt in zip(top_matches, excerpts, strict=True):
+            if isinstance(excerpt, str) and excerpt:
+                match.content = excerpt
 
     async def search_raw(
         self,
@@ -242,10 +238,15 @@ class ReverseImagePipeline:
         """按 Google Lens → Yandex → Bing 顺序执行以图搜图并返回原始结构。"""
         max_results = max(int(self._cfg.max_results or 8), 1)
         errors: list[str] = []
+        lens_limit, yandex_limit, bing_limit = _stage_limits(self._backend.timeout)
+        attempted = 0
 
         # 1. Google Lens（优先）
         if self.google_lens.enabled and image_bytes:
-            lens_out = await self.google_lens.search(image_bytes=image_bytes, max_results=max_results)
+            attempted += 1
+            lens_out = await _run_stage(
+                "google_lens", lens_limit, self.google_lens.search(image_bytes=image_bytes, max_results=max_results)
+            )
             if lens_out.has_useful_data:
                 self.last_engine = "google_lens"
                 return lens_out
@@ -257,10 +258,10 @@ class ReverseImagePipeline:
         yandex_out: Optional[ReverseImageOutput] = None
         shared_image_url = (image_url or "").strip()
         if self.yandex.enabled and (image_bytes or shared_image_url):
-            yandex_out = await self.yandex.search(
-                image_bytes=image_bytes,
-                image_url=shared_image_url,
-                max_results=max_results,
+            attempted += 1
+            yandex_out = await _run_stage(
+                "yandex", yandex_limit,
+                self.yandex.search(image_bytes=image_bytes, image_url=shared_image_url, max_results=max_results),
             )
             if yandex_out.uploaded_image_url and not shared_image_url:
                 shared_image_url = yandex_out.uploaded_image_url
@@ -273,7 +274,10 @@ class ReverseImagePipeline:
         # 3. Bing Visual Search（纯 HTTP 兜底或补充，当 Yandex 结果不足 3 条时触发）
         bing_out: Optional[ReverseImageOutput] = None
         if self.bing.enabled and shared_image_url:
-            bing_out = await self.bing.search(image_url=shared_image_url, max_results=max_results)
+            attempted += 1
+            bing_out = await _run_stage(
+                "bing", bing_limit, self.bing.search(image_url=shared_image_url, max_results=max_results)
+            )
             if bing_out.error:
                 errors.append(f"Bing: {bing_out.error}")
 
@@ -289,7 +293,7 @@ class ReverseImagePipeline:
             combined_matches.extend(bing_out.matches)
             engines_used.append("bing")
 
-        if combined_matches:
+        if combined_matches or tags:
             merged_engine = "+".join(engines_used)
             self.last_engine = merged_engine
             return ReverseImageOutput(
@@ -300,10 +304,12 @@ class ReverseImagePipeline:
             )
 
         self.last_engine = ""
-        return ReverseImageOutput(
-            engine="",
-            error="；".join(errors) if errors else "所有已启用的以图搜图引擎均未返回有效结果",
-        )
+        if attempted == 0:
+            message = "没有可用于该图片的识图引擎。"
+            if self.bing.enabled and not shared_image_url:
+                message += "必应需要图片链接，聊天图片需先启用 Yandex 上传。"
+            return ReverseImageOutput(engine="", error=message)
+        return ReverseImageOutput(engine="", error="；".join(errors) if len(errors) == attempted else "")
 
     async def run(
         self,
@@ -314,27 +320,31 @@ class ReverseImagePipeline:
     ) -> str:
         """执行完整以图搜图并返回可直接交给 Planner 的文本结果。"""
         cleaned_url = (image_url or "").strip()
-        if not image_bytes and cleaned_url:
+        if image_bytes is not None and cleaned_url:
+            raise ValueError("聊天图片和图片链接只能选一个")
+        url_key = ""
+        if cleaned_url:
+            url_key = "url:" + compute_image_hash(cleaned_url.encode())
+            cached = self._get_cached(url_key, _URL_CACHE_MAX_SECONDS)
+            if cached is not None:
+                logger.info("命中以图搜图链接缓存")
+                return cached
             image_bytes = await self.download_image_url(cleaned_url)
-
-        if not image_bytes and not cleaned_url:
-            return "未获取到有效的图片数据，无法执行以图搜图。"
-
-        cache_key = (image_hash or "").strip()
-        if not cache_key and image_bytes:
-            cache_key = compute_image_hash(image_bytes)
-        elif not cache_key and cleaned_url:
-            cache_key = f"url:{cleaned_url}"
+        if not image_bytes or len(image_bytes) > MAX_IMAGE_BYTES:
+            raise ValueError("图片为空或超过 15 MiB")
+        cache_key = "image:" + ((image_hash or "").strip() or compute_image_hash(image_bytes))
 
         cached = self._get_cached(cache_key)
         if cached is not None:
             logger.info("命中以图搜图缓存 (key=%s)", cache_key[:16])
+            self._set_cached(url_key, cached)
             return cached
-
+        await asyncio.to_thread(verify_image_data, image_bytes)
         output = await self.search_raw(image_bytes=image_bytes, image_url=cleaned_url)
         if not output.has_useful_data:
-            detail = f"（{output.error}）" if output.error else ""
-            return f"未能通过以图搜图找到该图片的关联网页信息{detail}。"
+            if output.error:
+                raise ValueError(output.error)
+            return "已完成以图搜图，但没有找到关联网页或识别信息。"
 
         await self._enrich_with_content_fetcher(output)
         formatted = format_reverse_image_output(
@@ -342,6 +352,7 @@ class ReverseImagePipeline:
             max_content_length=min(int(self._backend.max_content_length or 800), 1200),
         )
         self._set_cached(cache_key, formatted)
+        self._set_cached(url_key, formatted)
         return formatted
 
     async def aclose(self) -> None:

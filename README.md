@@ -53,6 +53,18 @@ Tavily、You、AnySearch 和 Exa 的密钥可分别前往 [Tavily](https://app.t
 
 <img src="0d116086-0df6-4694-97d3-28d521184223.png" alt="千早爱音示例" width="400">
 
+### 以图搜图
+
+发一张图片并问麦麦“这张图出自哪里？”，也可以提供一个公网图片链接。识图会把图片或链接交给启用的搜索服务，不适合发送私人图片。聊天图片优先用 Google Lens；它不可用时会尝试 Yandex。必应需要图片链接，只有聊天图片时依赖 Yandex 提供上传后的地址。如需通过代理下载图片，请在插件设置中填写代理地址。
+
+Google Lens 首次使用时需要启动浏览器。要区分启动慢、搜索慢还是重复图片直接命中缓存，可以先看麦麦的工具调用耗时，再对照插件日志中的浏览器启动、上传、导航、结果提取和各引擎耗时。也可以在麦麦项目根目录运行以下命令；它使用公开的 Python 标志和独立的临时浏览器目录，不读取账号登录资料：
+
+```bash
+uv run --no-sync python plugins/google_search_plugin/tools/probe_reverse_image.py --config plugins/google_search_plugin/config.toml
+```
+
+输出依次为首次调用、清除搜索结果缓存后的重复搜索、保留缓存的重复调用。判断热搜耗时时要看实际返回结果的引擎；如果 Google 已进入冷却，后续测到的是备用引擎。
+
 ### 缩写翻译
 
 默认启用，基于神奇海螺 nbnhhsh 查询网络缩写和黑话，例如“yyds 是什么意思？”。

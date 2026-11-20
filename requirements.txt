@@ -1,4 +1,5 @@
-aiohttp>=3.8.0
+aiohttp>=3.9.0
+Pillow>=10.0.0
 beautifulsoup4>=4.11.0
 curl_cffi>=0.7.0
 lxml>=4.9.0

@@ -313,7 +313,7 @@ _HINTS = {
     "reverse_image.google_lens_headless": "开启后在后台无界面运行浏览器；本地排障或需要观察页面时可临时关闭。",
     "reverse_image.google_lens_browser_channel": "auto 优先尝试本机 Chrome/Edge 并回退 Playwright 内置 Chromium；Docker 环境可选 chromium。",
     "reverse_image.yandex_enabled": "纯 HTTP 识图引擎，免 Cookie、免浏览器，二次元角色与原图识别表现好。",
-    "reverse_image.bing_enabled": "纯 HTTP 视觉搜索，免 Cookie、免浏览器，适合补充中文社区（B站/NGA/PTT）讨论页面。",
+    "reverse_image.bing_enabled": "必应支持直接搜索图片链接；聊天图片需要先由 Yandex 提供图片链接，才能用必应补充结果。",
     "reverse_image.max_results": "每次以图搜图返回给麦麦的最大关联页面条数。",
     "reverse_image.fetch_content": "开启后会额外抓取前 2 个关联页面的正文片段；默认关闭以加快响应，麦麦可按需再用 web_search 访问具体链接。",
     "reverse_image.cache_ttl_seconds": "相同图片的缓存有效秒数，避免群聊反复发送同一张表情包时重复请求；0 表示关闭缓存。",

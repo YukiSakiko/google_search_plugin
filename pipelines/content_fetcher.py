@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup
 from readability import Document
 
 from .zhihu_extractor import ZhihuExtractor, is_zhihu_url
+from .public_fetch import fetch_public_resource
 
 if TYPE_CHECKING:
     from ..config import EnginesSection, SearchBackendSection
@@ -78,62 +79,78 @@ class ContentFetcher:
                     return None
 
                 html_bytes = await response.read()
-                # 智能解码
-                try:
-                    html = html_bytes.decode(response.charset or "utf-8")
-                except (UnicodeDecodeError, TypeError):
-                    try:
-                        html = html_bytes.decode("gbk", errors="ignore")
-                    except UnicodeDecodeError:
-                        html = html_bytes.decode("utf-8", errors="ignore")
-
-                # 1. trafilatura
-                try:
-                    import trafilatura
-
-                    extracted = trafilatura.extract(
-                        html,
-                        include_comments=False,
-                        include_tables=True,
-                        no_fallback=False,
-                    )
-                    if extracted and len(extracted.strip()) > 100:
-                        logger.debug("trafilatura 提取成功 %s", url)
-                        return extracted.strip()[:max_length]
-                except ImportError:
-                    logger.debug("trafilatura 未安装,跳过")
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("trafilatura 提取失败: %s", exc)
-
-                # 2. readability-lxml
-                try:
-                    doc = Document(html, min_text_length=50, retry_length=250, url=url)
-                    summary_html = doc.summary()
-                    soup = BeautifulSoup(summary_html, "lxml")
-                    readability_text = soup.get_text(separator="\n", strip=True)
-                    if readability_text and len(readability_text) > 100:
-                        logger.debug("readability 提取成功 %s", url)
-                        return readability_text[:max_length]
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("readability 提取失败: %s", exc)
-
-                # 3. BeautifulSoup 兜底
-                try:
-                    soup = BeautifulSoup(html, "lxml")
-                    for tag in soup(["script", "style", "nav", "header", "footer", "aside"]):
-                        tag.decompose()
-                    fallback = soup.get_text(separator="\n", strip=True)
-                    logger.debug("BeautifulSoup 兜底 %s", url)
-                    return fallback[:max_length] if fallback else None
-                except Exception as exc:  # noqa: BLE001
-                    logger.error("BeautifulSoup 兜底也失败: %s", exc)
-                    return None
+                return self._extract_page(html_bytes, response.charset, url, max_length)
 
         except asyncio.TimeoutError:
             logger.warning("抓取超时: %s", url)
             return None
         except Exception as exc:  # noqa: BLE001
             logger.error("抓取未知错误 %s: %s", url, exc)
+            return None
+
+    async def fetch_public_excerpt(self, url: str) -> Optional[str]:
+        """识图服务返回的链接不可信，不携带账户信息，也不转交给第三方正文服务。"""
+        response = await fetch_public_resource(
+            url, proxy=self._backend.proxy, timeout=max(self._backend.content_timeout, 1),
+            max_bytes=2 * 1024 * 1024,
+        )
+        if response.content_type not in {"text/html", "application/xhtml+xml", "text/plain"}:
+            return None
+        return await asyncio.to_thread(
+            self._extract_page, response.body, response.charset, url, self._backend.max_content_length
+        )
+
+    @staticmethod
+    def _extract_page(html_bytes: bytes, charset: str | None, url: str, max_length: int) -> Optional[str]:
+        # 智能解码
+        try:
+            html = html_bytes.decode(charset or "utf-8")
+        except (UnicodeDecodeError, TypeError):
+            try:
+                html = html_bytes.decode("gbk", errors="ignore")
+            except UnicodeDecodeError:
+                html = html_bytes.decode("utf-8", errors="ignore")
+
+        # 1. trafilatura
+        try:
+            import trafilatura
+
+            extracted = trafilatura.extract(
+                html,
+                include_comments=False,
+                include_tables=True,
+                no_fallback=False,
+            )
+            if extracted and len(extracted.strip()) > 100:
+                logger.debug("trafilatura 提取成功 %s", url)
+                return extracted.strip()[:max_length]
+        except ImportError:
+            logger.debug("trafilatura 未安装,跳过")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("trafilatura 提取失败: %s", exc)
+
+        # 2. readability-lxml
+        try:
+            doc = Document(html, min_text_length=50, retry_length=250, url=url)
+            summary_html = doc.summary()
+            soup = BeautifulSoup(summary_html, "lxml")
+            readability_text = soup.get_text(separator="\n", strip=True)
+            if readability_text and len(readability_text) > 100:
+                logger.debug("readability 提取成功 %s", url)
+                return readability_text[:max_length]
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("readability 提取失败: %s", exc)
+
+        # 3. BeautifulSoup 兜底
+        try:
+            soup = BeautifulSoup(html, "lxml")
+            for tag in soup(["script", "style", "nav", "header", "footer", "aside"]):
+                tag.decompose()
+            fallback = soup.get_text(separator="\n", strip=True)
+            logger.debug("BeautifulSoup 兜底 %s", url)
+            return fallback[:max_length] if fallback else None
+        except Exception as exc:  # noqa: BLE001
+            logger.error("BeautifulSoup 兜底也失败: %s", exc)
             return None
 
     async def fetch_batch(
