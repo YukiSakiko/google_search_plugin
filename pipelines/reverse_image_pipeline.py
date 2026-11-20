@@ -14,7 +14,7 @@ import logging
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import TYPE_CHECKING, Awaitable, Optional
+from typing import TYPE_CHECKING, Awaitable, NamedTuple, Optional
 
 from .public_fetch import MAX_IMAGE_BYTES, fetch_public_resource
 from ..search_engines.reverse_image.base import verify_image_data
@@ -36,17 +36,27 @@ logger = logging.getLogger(__name__)
 
 _MAX_CACHE_ENTRIES = 128
 _URL_CACHE_MAX_SECONDS = 60
+_LENS_LINKS_ONLY_CACHE_SECONDS = 15
 _DEFAULT_PROFILE_DIR = Path(__file__).resolve().parent.parent / ".google_lens_profile"
 
 
-def _stage_limits(search_timeout: int) -> tuple[int, int, int]:
+class _CacheEntry(NamedTuple):
+    text: str
+    expires_at: float
+
+
+def _lens_links_only(output: ReverseImageOutput) -> bool:
+    return output.engine == "google_lens" and bool(output.matches) and not output.ai_overview.strip()
+
+
+def _stage_limits(search_timeout: int, overview_wait_seconds: int = 6) -> tuple[int, int, int]:
     timeout = max(search_timeout, 10)
-    # Lens: upload + navigation + rendering (up to 12s), plus bounded startup/queue time.
-    return 2 * max(timeout, 25) + 12 + 15, 2 * timeout + 3, timeout + 3
+    # Lens: upload + navigation, up to 10s for first results, then the overview grace period.
+    return 2 * max(timeout, 25) + 10 + overview_wait_seconds + 15, 2 * timeout + 3, timeout + 3
 
 
 def reverse_rpc_budget(cfg: "ReverseImageSection", backend: "SearchBackendSection") -> int:
-    lens, yandex, bing = _stage_limits(backend.timeout)
+    lens, yandex, bing = _stage_limits(backend.timeout, cfg.google_lens_overview_wait_seconds)
     download = max(backend.content_timeout, 10)
     stages = (
         (lens if cfg.google_lens_enabled else 0)
@@ -104,8 +114,10 @@ def format_reverse_image_output(
         if max_content_length > 0 and len(overview) > max_content_length * 2:
             overview = overview[: max_content_length * 2] + "..."
         lines.append("")
-        lines.append("### 参考概览")
+        lines.append("### Google AI 概览" if output.engine == "google_lens" else "### 参考概览")
         lines.append(overview)
+    elif _lens_links_only(output):
+        lines.extend(("", "本次未读取到 Google AI 概览，以下是关联网页。"))
 
     if output.tags:
         lines.append("")
@@ -161,6 +173,7 @@ class ReverseImagePipeline:
             default_profile_dir=str(_DEFAULT_PROFILE_DIR),
             headless=bool(reverse_cfg.google_lens_headless),
             browser_channel=reverse_cfg.google_lens_browser_channel,
+            overview_wait_seconds=reverse_cfg.google_lens_overview_wait_seconds,
         )
         self.yandex = YandexVisualEngine(
             enabled=bool(reverse_cfg.yandex_enabled),
@@ -175,8 +188,7 @@ class ReverseImagePipeline:
             language=hl,
         )
 
-        # OrderedDict 实现简单 LRU + TTL 缓存: image_hash -> (ts, formatted_text)
-        self._cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
+        self._cache: OrderedDict[str, _CacheEntry] = OrderedDict()
         self.last_engine: str = ""
 
     @staticmethod
@@ -187,25 +199,23 @@ class ReverseImagePipeline:
             return f"{primary.strip().lower()}-{region.strip().upper()}"
         return cleaned or "zh-CN"
 
-    def _get_cached(self, cache_key: str, max_age: int | None = None) -> Optional[str]:
-        ttl = int(self._cfg.cache_ttl_seconds or 0)
-        if ttl <= 0 or not cache_key:
-            return None
+    def _get_cached(self, cache_key: str) -> _CacheEntry | None:
         entry = self._cache.get(cache_key)
         if entry is None:
             return None
-        ts, text = entry
-        if time.monotonic() - ts >= (ttl if max_age is None else min(ttl, max_age)):
+        if time.monotonic() >= entry.expires_at or self._cfg.cache_ttl_seconds <= 0:
             self._cache.pop(cache_key, None)
             return None
         self._cache.move_to_end(cache_key)
-        return text
+        return entry
 
-    def _set_cached(self, cache_key: str, text: str) -> None:
-        ttl = int(self._cfg.cache_ttl_seconds or 0)
-        if ttl <= 0 or not cache_key or not text:
+    def _set_cached(self, cache_key: str, entry: _CacheEntry, *, max_age: int | None = None) -> None:
+        if not cache_key:
             return
-        self._cache[cache_key] = (time.monotonic(), text)
+        if max_age is not None:
+            # A URL alias must not keep the original image result alive past its expiry.
+            entry = _CacheEntry(entry.text, min(entry.expires_at, time.monotonic() + max_age))
+        self._cache[cache_key] = entry
         self._cache.move_to_end(cache_key)
         while len(self._cache) > _MAX_CACHE_ENTRIES:
             self._cache.popitem(last=False)
@@ -238,7 +248,9 @@ class ReverseImagePipeline:
         """按 Google Lens → Yandex → Bing 顺序执行以图搜图并返回原始结构。"""
         max_results = max(int(self._cfg.max_results or 8), 1)
         errors: list[str] = []
-        lens_limit, yandex_limit, bing_limit = _stage_limits(self._backend.timeout)
+        lens_limit, yandex_limit, bing_limit = _stage_limits(
+            self._backend.timeout, self._cfg.google_lens_overview_wait_seconds
+        )
         attempted = 0
 
         # 1. Google Lens（优先）
@@ -325,10 +337,10 @@ class ReverseImagePipeline:
         url_key = ""
         if cleaned_url:
             url_key = "url:" + compute_image_hash(cleaned_url.encode())
-            cached = self._get_cached(url_key, _URL_CACHE_MAX_SECONDS)
+            cached = self._get_cached(url_key)
             if cached is not None:
                 logger.info("命中以图搜图链接缓存")
-                return cached
+                return cached.text
             image_bytes = await self.download_image_url(cleaned_url)
         if not image_bytes or len(image_bytes) > MAX_IMAGE_BYTES:
             raise ValueError("图片为空或超过 15 MiB")
@@ -337,8 +349,8 @@ class ReverseImagePipeline:
         cached = self._get_cached(cache_key)
         if cached is not None:
             logger.info("命中以图搜图缓存 (key=%s)", cache_key[:16])
-            self._set_cached(url_key, cached)
-            return cached
+            self._set_cached(url_key, cached, max_age=_URL_CACHE_MAX_SECONDS)
+            return cached.text
         await asyncio.to_thread(verify_image_data, image_bytes)
         output = await self.search_raw(image_bytes=image_bytes, image_url=cleaned_url)
         if not output.has_useful_data:
@@ -351,8 +363,13 @@ class ReverseImagePipeline:
             output,
             max_content_length=min(int(self._backend.max_content_length or 800), 1200),
         )
-        self._set_cached(cache_key, formatted)
-        self._set_cached(url_key, formatted)
+        ttl = self._cfg.cache_ttl_seconds
+        if _lens_links_only(output):
+            ttl = min(ttl, _LENS_LINKS_ONLY_CACHE_SECONDS)
+        if ttl > 0:
+            entry = _CacheEntry(formatted, time.monotonic() + ttl)
+            self._set_cached(cache_key, entry)
+            self._set_cached(url_key, entry, max_age=_URL_CACHE_MAX_SECONDS)
         return formatted
 
     async def aclose(self) -> None:

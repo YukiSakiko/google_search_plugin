@@ -71,6 +71,18 @@ class ConfigUiSchemaTests(unittest.TestCase):
         self.assertGreater(basic_field_count, 0)
         self.assertLessEqual(basic_field_count, 10)
 
+    def test_lens_overview_wait_is_configurable_in_advanced_settings(self) -> None:
+        name = "google_lens_overview_wait_seconds"
+        section = self.ui["sections"]["reverse_image_advanced"]
+        self.assertIn(name, section["fields"])
+        self.assertEqual(getattr(GoogleSearchPluginConfig().reverse_image, name), 6)
+        for value in (0, 30):
+            cfg = GoogleSearchPluginConfig.model_validate({"reverse_image": {name: value}})
+            self.assertEqual(getattr(cfg.reverse_image, name), value)
+        for value in (-1, 31):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                GoogleSearchPluginConfig.model_validate({"reverse_image": {name: value}})
+
     def test_fields_have_localized_labels_and_help(self) -> None:
         for section_id, _, field_name, field in self.iter_fields():
             with self.subTest(section=section_id, field=field_name):

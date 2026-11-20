@@ -182,6 +182,16 @@ class RunnerConfigUpgradeTests(unittest.TestCase):
         self.assert_user_values_preserved(persisted)
         self.assert_new_engine_defaults(persisted)
 
+    def test_omitted_lens_wait_uses_default_without_rewriting_user_config(self) -> None:
+        raw = self.plugin.build_default_config()
+        raw["reverse_image"].pop("google_lens_overview_wait_seconds")
+        raw["reverse_image"]["google_lens_browser_channel"] = "msedge"
+        original = self.write_fixture(raw)
+        config = self.runner._apply_plugin_config(self.meta)
+        self.assertEqual(config["reverse_image"]["google_lens_overview_wait_seconds"], 6)
+        self.assertEqual(config["reverse_image"]["google_lens_browser_channel"], "msedge")
+        self.assertEqual(self.config_path.read_bytes(), original)
+
     def test_complete_current_config_is_not_rewritten_on_load(self) -> None:
         raw = self.plugin.build_default_config()
         original_bytes = self.write_fixture(raw)

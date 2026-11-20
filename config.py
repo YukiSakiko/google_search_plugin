@@ -367,6 +367,9 @@ class ReverseImageSection(PluginConfigBase):
         default="auto",
         description="Google Lens 浏览器内核选择：auto 优先探测系统 Chrome/Edge 并回退内置 Chromium",
     )
+    google_lens_overview_wait_seconds: int = Field(
+        default=6, ge=0, le=30, description="已有网页结果时，最多再等多少秒读取 Google AI 概览；0 表示不额外等待。",
+    )
     yandex_enabled: bool = Field(
         default=True,
         description="是否启用 Yandex 纯 HTTP 以图搜图（免 Cookie、免浏览器）",

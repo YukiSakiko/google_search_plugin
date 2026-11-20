@@ -83,6 +83,7 @@ async def measure(args, profile):
                         "stages": stages,
                         "matched": matched,
                         "engine": pipe.last_engine if matched else None,
+                        "google_ai_overview": matched and "\n### Google AI 概览\n" in body,
                         "cache_hit": matched and not ran_search,
                         "mentions_python": "python" in body.lower(),
                         "browser_already_open": reused,

@@ -663,7 +663,7 @@ class GoogleSearchPlugin(MaiBotPlugin):
             "以图搜图/识图工具。当聊天中出现不认识的角色、表情包、二创图、梗图、截图、画师作品或物体，"
             "想要查找图片出处、角色身份、网络梗背景或关联网页信息时调用。"
             "可传入聊天图片所在消息的 msg_id（以及可选图片序号 image_index），或直接传入图片链接 image_url。"
-            "工具会返回图片关联的网页标题、链接与参考信息，供你直接结合上下文总结回复。"
+            "优先返回 Google Lens 页面上的 AI 概览，也可能只有关联网页。可以根据来源总结，但不要把自己的推断说成 Google 的概览。"
         ),
         parameters=[
             ToolParameterInfo(

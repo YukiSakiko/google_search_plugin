@@ -24,6 +24,7 @@ from typing import Any, Literal, Optional
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from .base import (
+    _GOOGLE_INTERNAL_HOSTS,
     ReverseImageMatch,
     ReverseImageOutput,
     deduplicate_matches,
@@ -74,11 +75,15 @@ async def _close_handles(context: Any, browser: Any, driver: Any) -> None:
 
 LoginState = Literal["idle", "starting", "waiting", "saving", "logged_in", "error"]
 
+_AIO_LABELS = frozenset({"AI Overview", "AI 概览", "AI 摘要", "AI 概覽"})
 # AI 概览文本末尾常见的 UI 按钮噪声行
 _AIO_NOISE_LINES = frozenset(
     {
-        "AI 概览",
-        "AI Overview",
+        *_AIO_LABELS,
+        "正在生成",
+        "正在加载",
+        "Loading",
+        "Generating",
         "全部显示",
         "显示更多",
         "Show more",
@@ -93,6 +98,62 @@ _AIO_NOISE_LINES = frozenset(
         "关于此回答",
     }
 )
+
+# 返回同一次 DOM 读取中得到的概览和外链，避免等待结束时组件已经被替换。
+_LENS_RESULT_SNAPSHOT = r"""({limit, overviewOnly, labels, noise, internalHosts}) => {
+    const norm = s => (s || '').replace(/\s+/g, ' ').replace(/\u2060/g, '').trim();
+    const visible = e => {
+        if (e.closest('[hidden], [aria-hidden="true"]')) return false;
+        if (e.checkVisibility) return e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true});
+        const style = getComputedStyle(e);
+        return e.getClientRects().length > 0 && style.visibility === 'visible' && style.opacity !== '0';
+    };
+    const meaningful = s => {
+        const text = norm(s).replace(/[.。…]+$/, '');
+        return text && !noise.includes(text) && !/^\+\d+$/.test(text);
+    };
+    let aio = '', source = '';
+    const blocks = document.querySelectorAll('[data-scope-id="turn"], ' +
+        ':is(section, [role="region"]):is([aria-label], [aria-labelledby])');
+    for (const block of blocks) {
+        const turn = block.matches('[data-scope-id="turn"]');
+        if (!turn) {
+            const labelledBy = (block.getAttribute('aria-labelledby') || '').split(/\s+/);
+            const label = norm(labelledBy.map(id => document.getElementById(id)?.textContent || '').join(' ')) ||
+                norm(block.getAttribute('aria-label'));
+            if (!labels.includes(label)) continue;
+        }
+        if (!visible(block) || block.closest('[aria-busy="true"]')) continue;
+        // 标题、按钮和引用链接都可能先于正文出现。
+        const nodes = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+        let found = false;
+        while (nodes.nextNode()) {
+            const node = nodes.currentNode, el = node.parentElement;
+            if (el && meaningful(node.textContent) &&
+                !el.closest('a, button, [role="button"], [role="heading"], h1,h2,h3,h4,h5,h6, [aria-busy="true"], script, style') &&
+                visible(el)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) continue;
+        aio = (block.innerText || '').split('\n').filter(meaningful).join('\n');
+        if (aio) { source = turn ? 'turn' : 'labelled-region'; break; }
+    }
+    if (overviewOnly && !aio) return null;
+
+    const links = [], seen = new Set();
+    for (const a of document.querySelectorAll('a[href^="http"]')) {
+        if (internalHosts.some(host => a.hostname === host || a.hostname.endsWith('.' + host))) continue;
+        if (seen.has(a.href) || !visible(a)) continue;
+        const title = norm(a.innerText || a.getAttribute('aria-label') || a.title);
+        if (title.length < 2) continue;
+        seen.add(a.href);
+        links.push({title: title.slice(0, 180), url: a.href});
+        if (links.length >= limit * 3) break;
+    }
+    return aio || links.length ? {aio, source, links} : null;
+}"""
 
 
 def _ensure_hl_param(url: str, hl: str) -> str:
@@ -140,6 +201,7 @@ class GoogleLensReverseEngine:
         headless: bool = True,
         browser_channel: str = "auto",
         captcha_cooldown_seconds: int = 300,
+        overview_wait_seconds: int = 6,
     ) -> None:
         self.enabled = enabled
         self.proxy = (proxy or "").strip() or None
@@ -151,6 +213,7 @@ class GoogleLensReverseEngine:
         self.headless = bool(headless)
         self.browser_channel = (browser_channel or "auto").strip().lower()
         self.captcha_cooldown_seconds = max(int(captcha_cooldown_seconds or 0), 0)
+        self.overview_wait_seconds = max(0, min(30, int(overview_wait_seconds)))
 
         self._lock = asyncio.Lock()
         self._closed = False
@@ -320,60 +383,39 @@ class GoogleLensReverseEngine:
 
     async def _extract_from_page(self, page: Any, max_results: int) -> tuple[list[ReverseImageMatch], str]:
         """从已加载的 Google Lens 结果页提取外链与可选 AI 概览。"""
-        # 等待外链出现（最长 ~8s），允许页面异步完成渲染
-        try:
-            await page.wait_for_function(
-                """() => {
-                    const anchors = document.querySelectorAll('a[href^="http"]');
-                    for (const a of anchors) {
-                        const h = a.href || '';
-                        if (h && !h.includes('google.') && !h.includes('gstatic.') && !h.includes('googleapis.')) {
-                            return true;
-                        }
-                    }
-                    return false;
-                }""",
-                timeout=min(self.timeout * 1000, 10000),
-            )
-        except Exception:
-            pass
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-        # 概览已经显示时直接提取，否则保留原来 1.5 秒的等待窗口。
-        try:
-            await page.wait_for_function(
-                """noise => (document.querySelector('[data-scope-id="turn"]')?.innerText || '')
-                    .split('\\n').some(s => s.trim().length >= 8 && !noise.includes(s.trim()))""",
-                arg=sorted(_AIO_NOISE_LINES),
-                timeout=1500,
-            )
-        except Exception:
-            pass
+        started = time.monotonic()
+        options = {
+            "limit": max(max_results, 5),
+            "labels": sorted(_AIO_LABELS),
+            "noise": sorted(_AIO_NOISE_LINES),
+            "internalHosts": list(_GOOGLE_INTERNAL_HOSTS),
+        }
 
-        payload = await page.evaluate(
-            """(limit) => {
-                const links = [];
-                const seen = new Set();
-                for (const a of document.querySelectorAll('a[href^="http"]')) {
-                    const href = a.href || '';
-                    if (!href) continue;
-                    const text = (a.innerText || a.getAttribute('aria-label') || a.getAttribute('title') || '')
-                        .replace(/\\s+/g, ' ')
-                        .trim();
-                    if (!text || text.length < 2 || seen.has(href)) continue;
-                    seen.add(href);
-                    links.push({ title: text.slice(0, 180), url: href });
-                    if (links.length >= limit * 3) break;
-                }
+        async def wait_for_result(overview_only: bool, seconds: int) -> dict:
+            try:
+                handle = await page.wait_for_function(
+                    _LENS_RESULT_SNAPSHOT,
+                    arg={**options, "overviewOnly": overview_only},
+                    polling=200,
+                    timeout=seconds * 1000,
+                )
+            except PlaywrightTimeoutError:
+                return {}
+            try:
+                return await handle.json_value()
+            finally:
+                await handle.dispose()
 
-                let aio = '';
-                const turn = document.querySelector('[data-scope-id="turn"]');
-                if (turn && turn.innerText) {
-                    aio = turn.innerText;
-                }
-                return { links, aio };
-            }""",
-            max(max_results, 5),
-        )
+        payload = await wait_for_result(False, min(self.timeout, 10))
+        if payload.get("links") and not payload.get("aio") and self.overview_wait_seconds:
+            later = await wait_for_result(True, self.overview_wait_seconds)
+            if not later:
+                # 等概览期间可能陆续出现更多外链，返回页面的最新结果。
+                later = await page.evaluate(_LENS_RESULT_SNAPSHOT, {**options, "overviewOnly": False})
+            if later:
+                payload = {**later, "links": (later.get("links") or []) + payload["links"]}
 
         matches: list[ReverseImageMatch] = []
         for item in payload.get("links") or []:
@@ -390,6 +432,12 @@ class GoogleLensReverseEngine:
             )
         cleaned_matches = deduplicate_matches(matches, max_results)
         ai_overview = _clean_ai_overview_text(str(payload.get("aio") or ""))
+        logger.info(
+            "Google Lens 提取：概览=%s，关联网页=%d，等待 %.2f 秒",
+            payload.get("source") if ai_overview else "未读到",
+            len(cleaned_matches),
+            time.monotonic() - started,
+        )
         return cleaned_matches, ai_overview
 
     def is_login_active(self) -> bool:

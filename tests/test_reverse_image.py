@@ -283,7 +283,7 @@ class ReverseImagePipelineTests(unittest.IsolatedAsyncioTestCase):
 
         text = await pipeline.run(image_bytes=_FAKE_PNG)
         self.assertIn("Google Lens", text)
-        self.assertIn("参考概览", text)
+        self.assertIn("\n### Google AI 概览\n", text)
         self.assertIn("DeepSeek 拟人角色（鲸鱼娘）", text)
         self.assertIn("https://aigengtu.com/zh/meme/2293", text)
         pipeline.yandex.search.assert_not_awaited()
