@@ -33,8 +33,14 @@ _SECTIONS = {
     "images": _Section(
         "actions",
         "图片搜索",
-        "按需开启；图片搜索不受默认网页搜索引擎影响。",
+        "按需开启；通过新版 Tool 返回候选图片由麦麦决定是否发送，不受默认网页搜索引擎影响。",
         {"image_search_enabled": "启用图片搜索"},
+    ),
+    "reverse_image": _Section(
+        "reverse_image",
+        "以图搜图（识图）",
+        "识别聊天中的图片出处、角色或梗图；默认优先 Google Lens，遇风控自动降级到 Yandex 和 Bing。",
+        {"enabled": "启用以图搜图"},
     ),
     "translation": _Section(
         "translation",
@@ -217,6 +223,23 @@ _SECTIONS = {
             "deepseek_max_tokens": "答案最大 Token 数",
         },
     ),
+    "reverse_image_advanced": _Section(
+        "reverse_image",
+        "以图搜图引擎参数",
+        "配置 Google Lens 持久化目录或 Cookie、备用引擎与正文补充策略。",
+        {
+            "google_lens_enabled": "启用 Google Lens",
+            "google_lens_cookies": "Google Lens 登录 Cookie",
+            "google_lens_profile_dir": "Google Lens 持久化目录",
+            "google_lens_headless": "Google Lens 无头模式",
+            "google_lens_browser_channel": "Google Lens 浏览器内核",
+            "yandex_enabled": "启用 Yandex 识图",
+            "bing_enabled": "启用 Bing 视觉搜索",
+            "max_results": "以图搜图结果数量",
+            "fetch_content": "额外抓取关联网页正文",
+            "cache_ttl_seconds": "同图缓存时长（秒）",
+        },
+    ),
     "translation_advanced": _Section(
         "translation",
         "缩写翻译请求参数",
@@ -232,7 +255,7 @@ _SECTIONS = {
 }
 
 _TABS = {
-    "basic": ("常用设置", ("search", "model", "images", "translation", "plugin")),
+    "basic": ("常用设置", ("search", "model", "images", "reverse_image", "translation", "plugin")),
     "engines": (
         "搜索引擎",
         ("google", "bing", "sogou", "duckduckgo", "tavily", "anysearch", "exa", "you", "deepseek"),
@@ -242,6 +265,7 @@ _TABS = {
         (
             "fetch_advanced",
             "model_advanced",
+            "reverse_image_advanced",
             "duckduckgo_advanced",
             "tavily_advanced",
             "anysearch_advanced",
@@ -282,6 +306,17 @@ _HINTS = {
     "engines.exa_text_max_characters": "每条结果的网页正文字符上限；0 使用服务端默认值。",
     "engines.exa_max_age_hours": "-2 由服务端自动决定，-1 仅使用缓存，0 请求最新内容，1-720 为允许的缓存小时数；lite 只能使用 -2。",
     "engines.exa_livecrawl_timeout_ms": "服务端实时抓取超时，单位为毫秒；0 使用默认值，1-90000 指定超时；lite 只能使用 0。",
+    "reverse_image.enabled": "开启后向麦麦暴露 reverse_image_search 工具，用于识别群聊或私聊图片出处、角色与梗图。",
+    "reverse_image.google_lens_enabled": "优先使用 Google Lens（准确率最高）；需要可访问 Google 的代理及本机浏览器/Playwright，遇风控会自动降级。",
+    "reverse_image.google_lens_cookies": "适合无桌面环境的 Docker/Linux 服务器部署：粘贴 google.com 登录态 Cookie 字符串；留空则使用本地持久化浏览器目录。",
+    "reverse_image.google_lens_profile_dir": "本地持久化浏览器用户数据目录；桌面端可直接在本页点击「打开浏览器登录 Google」按钮完成登录并长期复用。留空且未填 Cookie 时默认存于插件目录下 .google_lens_profile。",
+    "reverse_image.google_lens_headless": "开启后在后台无界面运行浏览器；本地排障或需要观察页面时可临时关闭。",
+    "reverse_image.google_lens_browser_channel": "auto 优先尝试本机 Chrome/Edge 并回退 Playwright 内置 Chromium；Docker 环境可选 chromium。",
+    "reverse_image.yandex_enabled": "纯 HTTP 识图引擎，免 Cookie、免浏览器，二次元角色与原图识别表现好。",
+    "reverse_image.bing_enabled": "纯 HTTP 视觉搜索，免 Cookie、免浏览器，适合补充中文社区（B站/NGA/PTT）讨论页面。",
+    "reverse_image.max_results": "每次以图搜图返回给麦麦的最大关联页面条数。",
+    "reverse_image.fetch_content": "开启后会额外抓取前 2 个关联页面的正文片段；默认关闭以加快响应，麦麦可按需再用 web_search 访问具体链接。",
+    "reverse_image.cache_ttl_seconds": "相同图片的缓存有效秒数，避免群聊反复发送同一张表情包时重复请求；0 表示关闭缓存。",
 }
 
 
@@ -303,7 +338,7 @@ def build_config_ui_schema(schema: dict[str, Any]) -> dict[str, Any]:
                     hint=_HINTS.get(path, field["description"]),
                     order=order,
                 )
-                if path == "search_backend.zhihu_cookies":
+                if path in {"search_backend.zhihu_cookies", "reverse_image.google_lens_cookies"}:
                     field["ui_type"] = "password"
                 if spec.source == "engines" and field_name.endswith("_api_keys"):
                     field["hint"] = (

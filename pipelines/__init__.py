@@ -10,7 +10,8 @@ plugin.py 只放装饰器与装配,业务逻辑都在这里。
 - zhihu_extractor: 知乎专用抓取与 initialState 解析
 - url_pipeline:   URL 直访总结流程
 - search_pipeline: 主搜索流程(引擎 + 抓取 + 总结)
-- image_search_pipeline: 图片搜索 + 30 分钟去重 + base64
+- image_search_pipeline: 图片搜索 + 30 分钟去重 + base64/MIME
+- reverse_image_pipeline: 反向以图搜图(Google Lens Playwright → Yandex → Bing) + 缓存
 
 工具调用结果由 host 的 maisaka.reasoning_engine 自动写入 ``tool_records`` 表,
 插件本身不写库。
