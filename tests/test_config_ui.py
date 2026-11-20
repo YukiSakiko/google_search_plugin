@@ -115,7 +115,7 @@ class ConfigUiSchemaTests(unittest.TestCase):
                 self.assertEqual(field["placeholder"], "添加一把 API 密钥")
 
     def test_cookie_uses_password_input_and_only_plugin_metadata_is_read_only(self) -> None:
-        expected_secrets = {("search_backend", "zhihu_cookies")}
+        expected_secrets = {("search_backend", "zhihu_cookies"), ("reverse_image", "google_lens_cookies")}
         password_fields = {
             (section_name, field_name)
             for _, section_name, field_name, field in self.iter_fields()

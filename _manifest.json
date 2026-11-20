@@ -5,14 +5,14 @@
   "description": "支持多个搜索引擎的网络搜索、缩写翻译以及图片搜索，并提供自动降级能力。",
   "author": {
     "name": "晴空",
-    "url": "https://github.com/XXXxx7258"
+    "url": "https://github.com/YukiSakiko"
   },
   "license": "AGPL",
   "urls": {
-    "repository": "https://github.com/XXXxx7258/google_search_plugin",
-    "homepage": "https://github.com/XXXxx7258/google_search_plugin",
-    "documentation": "https://github.com/XXXxx7258/google_search_plugin#readme",
-    "issues": "https://github.com/XXXxx7258/google_search_plugin/issues"
+    "repository": "https://github.com/YukiSakiko/google_search_plugin",
+    "homepage": "https://github.com/YukiSakiko/google_search_plugin",
+    "documentation": "https://github.com/YukiSakiko/google_search_plugin#readme",
+    "issues": "https://github.com/YukiSakiko/google_search_plugin/issues"
   },
   "host_application": {
     "min_version": "0.10.0",
@@ -26,7 +26,12 @@
     {
       "type": "python_package",
       "name": "aiohttp",
-      "version_spec": ">=3.8.0"
+      "version_spec": ">=3.9.0"
+    },
+    {
+      "type": "python_package",
+      "name": "Pillow",
+      "version_spec": ">=10.0.0"
     },
     {
       "type": "python_package",
@@ -91,7 +96,8 @@
     "send.image",
     "send.forward",
     "component.enable",
-    "component.disable"
+    "component.disable",
+    "maisaka.context.resolve_image"
   ],
   "i18n": {
     "default_locale": "zh-CN",

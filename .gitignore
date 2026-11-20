@@ -213,3 +213,4 @@ __marimo__/
 config.toml
 config.toml*
 *.bak
+.google_lens_profile/

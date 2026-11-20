@@ -26,7 +26,7 @@ class PluginSection(PluginConfigBase):
 
     name: str = Field(default="google_search", description="插件名称")
     version: str = Field(default="4.1.1", description="插件版本")
-    config_version: str = Field(default="4.2.1", description="配置版本(Runner 用于兼容性校验)")
+    config_version: str = Field(default="4.3.0", description="配置版本(Runner 用于兼容性校验)")
     enabled: bool = Field(default=True, description="是否启用插件")
 
 
@@ -336,6 +336,63 @@ class EnginesSection(PluginConfigBase):
     )
 
 
+class ReverseImageSection(PluginConfigBase):
+    """反向以图搜图（识图）参数"""
+
+    __ui_label__ = "以图搜图"
+    __ui_icon__ = "scan-search"
+    __ui_order__ = 5
+
+    enabled: bool = Field(
+        default=True,
+        description="是否启用以图搜图工具（支持识别聊天中的图片并检索关联网页交由 Planner 总结）",
+    )
+    google_lens_enabled: bool = Field(
+        default=True,
+        description="是否优先启用 Google Lens（需本机浏览器或 Playwright，遇风控自动降级）",
+    )
+    google_lens_cookies: str = Field(
+        default="",
+        description="Google Lens 可选 Cookie 字符串（适合 Docker/无头服务器部署）；留空则使用本地持久化浏览器目录",
+    )
+    google_lens_profile_dir: str = Field(
+        default="",
+        description="Google Lens 本地持久化浏览器用户数据目录；留空且未填 Cookie 时默认使用插件目录下的 .google_lens_profile",
+    )
+    google_lens_headless: bool = Field(
+        default=True,
+        description="Google Lens 浏览器是否使用无头模式运行",
+    )
+    google_lens_browser_channel: Literal["auto", "chrome", "msedge", "chromium"] = Field(
+        default="auto",
+        description="Google Lens 浏览器内核选择：auto 优先探测系统 Chrome/Edge 并回退内置 Chromium",
+    )
+    yandex_enabled: bool = Field(
+        default=True,
+        description="是否启用 Yandex 纯 HTTP 以图搜图（免 Cookie、免浏览器）",
+    )
+    bing_enabled: bool = Field(
+        default=True,
+        description="是否启用 Bing 纯 HTTP 视觉搜索（免 Cookie、免浏览器）",
+    )
+    max_results: int = Field(
+        default=8,
+        ge=1,
+        le=20,
+        description="单次以图搜图返回的最大关联页面数量",
+    )
+    fetch_content: bool = Field(
+        default=False,
+        description="是否对前 2 个关联页面额外抓取网页正文片段；默认关闭，直接把标题与链接交由 Planner 判断",
+    )
+    cache_ttl_seconds: int = Field(
+        default=3600,
+        ge=0,
+        le=86400,
+        description="相同图片的缓存有效时长（秒），0 表示禁用缓存",
+    )
+
+
 class TranslationSection(PluginConfigBase):
     """缩写翻译(神奇海螺 nbnhhsh)参数"""
 
@@ -361,4 +418,5 @@ class GoogleSearchPluginConfig(PluginConfigBase):
     actions: ActionsSection = Field(default_factory=ActionsSection)
     search_backend: SearchBackendSection = Field(default_factory=SearchBackendSection)
     engines: EnginesSection = Field(default_factory=EnginesSection)
+    reverse_image: ReverseImageSection = Field(default_factory=ReverseImageSection)
     translation: TranslationSection = Field(default_factory=TranslationSection)

@@ -2,22 +2,24 @@
 
 业务逻辑全部抽到 ``pipelines/`` 子模块,本文件只负责装配 + 派发。
 
-提供三个面向 LLM 的组件:
+提供四个面向 LLM 的组件:
 - ``@Tool("web_search")``             主搜索工具(支持 URL 直访;搜索词由 planner 直接给出)
 - ``@Tool("abbreviation_translate")`` 缩写翻译(神奇海螺 nbnhhsh;关闭时置为禁用态,不暴露给 planner)
-- ``@Action("image_search")``         图片搜索(关闭时置为禁用态,不暴露给 planner)
+- ``@Tool("image_search")``           图片搜索(新版 Maisaka Tool 语义,通过 content_items 返回候选图片;关闭时置为禁用态)
+- ``@Tool("reverse_image_search")``   以图搜图/识图(支持读取聊天图片 msg_id 或图片 URL,返回关联网页供 planner 总结)
 
 外加一个 ``/google_search_status`` 诊断命令。
 """
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
-
+import base64
 import logging
+import time
+from typing import Any, ClassVar, Mapping, Optional
 
-from maibot_sdk import Action, Command, MaiBotPlugin, Tool
-from maibot_sdk.types import ActivationType, ToolParameterInfo, ToolParamType
+from maibot_sdk import Command, ConfigWidget, ConfigWidgetState, MaiBotPlugin, Tool
+from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
 from .config import GoogleSearchPluginConfig
 from .config_ui import build_config_ui_schema
@@ -25,6 +27,8 @@ from .pipelines.content_fetcher import ContentFetcher
 from .pipelines.engine_chain import EngineChain
 from .pipelines.image_search_pipeline import ImageSearchPipeline
 from .pipelines.llm_runner import LLMRunner
+from .pipelines.public_fetch import MAX_IMAGE_BYTES
+from .pipelines.reverse_image_pipeline import ReverseImagePipeline, reverse_rpc_budget
 from .pipelines.search_pipeline import SearchPipeline
 from .pipelines.url_pipeline import UrlPipeline, is_url
 from .pipelines.zhihu_extractor import ZhihuExtractor
@@ -39,10 +43,114 @@ class GoogleSearchPlugin(MaiBotPlugin):
 
     config_model = GoogleSearchPluginConfig
 
+    config_widgets: ClassVar[list[ConfigWidget]] = [
+        ConfigWidget(id="google_lens_status", kind="status", label="Google Lens 登录状态"),
+        ConfigWidget(
+            id="google_lens_login_start",
+            kind="action",
+            label="打开浏览器登录 Google",
+            confirmation="将在运行 MaiBot 的本机弹出浏览器窗口供登录 Google 账号（无桌面环境的服务器请改填 Cookie），是否继续？",
+        ),
+        ConfigWidget(
+            id="google_lens_login_finish",
+            kind="action",
+            label="完成并保存登录态",
+        ),
+        ConfigWidget(
+            id="google_lens_login_reset",
+            kind="action",
+            label="清除本地登录态 / 重置冷却",
+            confirmation="将清除插件自己创建的默认浏览器资料并重置冷却时间。自定义目录和旧目录不会删除。是否继续？",
+        ),
+    ]
+
     @classmethod
     def build_config_schema(cls, **plugin_info: str) -> dict[str, Any]:
         """只重组 WebUI 展示；配置模型和 TOML 路径保持不变。"""
         return build_config_ui_schema(super().build_config_schema(**plugin_info))
+
+    async def get_config_widget_state(self) -> dict[str, ConfigWidgetState]:
+        """向 WebUI 配置页上报 Google Lens 实时登录状态与可用按钮。"""
+        cfg = self.config
+        lens_enabled = bool(cfg.reverse_image.enabled and cfg.reverse_image.google_lens_enabled)
+        if not lens_enabled:
+            return {
+                "google_lens_status": ConfigWidgetState(
+                    text="未启用（请先开启「以图搜图」与「启用 Google Lens」，当前仅使用纯 HTTP 引擎或已停用）",
+                    tone="neutral",
+                ),
+                "google_lens_login_start": ConfigWidgetState(disabled=True),
+                "google_lens_login_finish": ConfigWidgetState(visible=False, disabled=True),
+                "google_lens_login_reset": ConfigWidgetState(disabled=True),
+            }
+
+        if not self._ensure_pipelines_ready() or self._reverse_image_pipeline is None:
+            return {
+                "google_lens_status": ConfigWidgetState(text="以图搜图组件尚未就绪", tone="warning"),
+                "google_lens_login_start": ConfigWidgetState(disabled=True),
+                "google_lens_login_finish": ConfigWidgetState(visible=False, disabled=True),
+                "google_lens_login_reset": ConfigWidgetState(disabled=True),
+            }
+
+        snap = self._reverse_image_pipeline.google_lens.get_login_snapshot()
+        state = snap["state"]
+        active = bool(snap["active"])
+        cooldown = int(snap["cooldown_remaining"])
+        has_cookies = bool(snap["has_cookies_config"])
+        has_profile = bool(snap["has_saved_profile"])
+        profile_dir = str(snap["profile_dir"] or "")
+
+        if active:
+            status_text = snap["message"] or "浏览器登录窗口运行中，请登录 Google 账号后关闭窗口或点击「完成并保存登录态」。"
+            tone = "warning"
+        elif state == "error":
+            status_text = snap["message"] or "启动登录窗口失败，请检查日志或改填 Cookie。"
+            tone = "error"
+        elif cooldown > 0:
+            status_text = (
+                f"当前处于风控冷却期（剩余 {cooldown} 秒），期间自动降级到 Yandex / Bing；"
+                "可重新登录 Google 账号或点击清除/重置。"
+            )
+            tone = "warning"
+        elif state == "logged_in" and snap["message"]:
+            status_text = snap["message"]
+            tone = "success"
+        elif has_cookies:
+            status_text = snap["message"] or "已填写 Google 登录信息，尚未验证账号状态。"
+            tone = "neutral"
+        elif has_profile:
+            status_text = snap["message"] or f"已找到本地浏览器资料，尚未确认账号登录状态：{profile_dir}"
+            tone = "neutral"
+        else:
+            status_text = (
+                snap["message"]
+                or "尚未登录本地 Google 账号（未登录时可能触发验证码并自动降级至 Yandex / Bing）；"
+                "桌面端可直接点击下方「打开浏览器登录 Google」。"
+            )
+            tone = "neutral"
+
+        return {
+            "google_lens_status": ConfigWidgetState(text=status_text, tone=tone),
+            "google_lens_login_start": ConfigWidgetState(disabled=active),
+            "google_lens_login_finish": ConfigWidgetState(visible=active, disabled=(state == "saving")),
+            "google_lens_login_reset": ConfigWidgetState(
+                disabled=active or (not has_profile and cooldown == 0 and state != "error")
+            ),
+        }
+
+    async def on_config_widget_action(self, action_id: str) -> None:
+        """处理 WebUI 配置页的 Google Lens 登录/保存/清除按钮点击。"""
+        if not self._ensure_pipelines_ready() or self._reverse_image_pipeline is None:
+            raise RuntimeError("以图搜图组件尚未就绪")
+        lens = self._reverse_image_pipeline.google_lens
+        if action_id == "google_lens_login_start":
+            await lens.start_interactive_login()
+        elif action_id == "google_lens_login_finish":
+            await lens.finish_interactive_login()
+        elif action_id == "google_lens_login_reset":
+            await lens.reset_login_state()
+        else:
+            raise ValueError(f"未知配置页操作: {action_id}")
 
     def get_default_config(self) -> dict[str, Any]:
         """保留旧字段直到插件归一化，避免宿主升级重建时提前丢弃密钥。"""
@@ -86,6 +194,7 @@ class GoogleSearchPlugin(MaiBotPlugin):
     _url_pipeline: Optional[UrlPipeline]
     _translator: Optional[NbnhhshTranslator]
     _image_pipeline: Optional[ImageSearchPipeline]
+    _reverse_image_pipeline: Optional[ReverseImagePipeline]
 
     def __init__(self) -> None:
         super().__init__()
@@ -96,24 +205,35 @@ class GoogleSearchPlugin(MaiBotPlugin):
         self._url_pipeline = None
         self._translator = None
         self._image_pipeline = None
+        self._reverse_image_pipeline = None
 
     # ---------------------------------------------------------------- #
     # 生命周期
     # ---------------------------------------------------------------- #
 
+    async def _close_reverse_image_pipeline(self) -> None:
+        pipeline = self._reverse_image_pipeline
+        if pipeline is not None:
+            try:
+                await pipeline.aclose()
+            except Exception as exc:  # noqa: BLE001
+                self.ctx.logger.warning("关闭以图搜图浏览器资源失败: %s", exc)
+
     async def on_load(self) -> None:
         self._build_pipelines()
         cfg = self.config
         self.ctx.logger.info(
-            "google_search_plugin v%s 已加载 (model=%s, default_engine=%s, image_search=%s, translation=%s)",
+            "google_search_plugin v%s 已加载 (model=%s, default_engine=%s, image_search=%s, reverse_image=%s, translation=%s)",
             cfg.plugin.version,
             cfg.models.model_name,
             cfg.search_backend.default_engine,
             cfg.actions.image_search_enabled,
+            cfg.reverse_image.enabled,
             cfg.translation.enabled,
         )
 
     async def on_unload(self) -> None:
+        await self._close_reverse_image_pipeline()
         self.ctx.logger.info("google_search_plugin 已卸载")
 
     async def on_config_update(
@@ -122,9 +242,10 @@ class GoogleSearchPlugin(MaiBotPlugin):
         config_data: dict[str, Any],
         version: str,
     ) -> None:
-        """配置热更新:简单粗暴重建所有组件。"""
+        """配置热更新:先释放旧浏览器资源，再重建所有组件。"""
         del config_data
         self.ctx.logger.info("配置更新事件: scope=%s version=%s,重建 pipelines", scope, version)
+        await self._close_reverse_image_pipeline()
         try:
             self._build_pipelines()
         except Exception as exc:  # noqa: BLE001
@@ -136,11 +257,12 @@ class GoogleSearchPlugin(MaiBotPlugin):
         cfg = self.config
         return {
             "abbreviation_translate": ("tool", bool(cfg.translation.enabled)),
-            "image_search": ("action", bool(cfg.actions.image_search_enabled)),
+            "image_search": ("tool", bool(cfg.actions.image_search_enabled)),
+            "reverse_image_search": ("tool", bool(cfg.reverse_image.enabled)),
         }
 
     def get_components(self) -> list[dict[str, Any]]:
-        """收集组件声明,按配置写入初始启用态,并注入 web_search 的 RPC 超时。
+        """收集组件声明,按配置写入初始启用态,并注入长耗时 Tool 的 RPC 超时。
 
         关闭功能时不能直接从声明中剔除对应组件:组件不进注册表的话,
         运行时热启用会因"未找到组件"失败,只能重载插件恢复。
@@ -157,6 +279,7 @@ class GoogleSearchPlugin(MaiBotPlugin):
         except Exception:  # noqa: BLE001
             states = {}
         web_search_timeout_ms = self._web_search_rpc_timeout_ms()
+        reverse_image_timeout_ms = self._reverse_image_rpc_timeout_ms()
         for comp in components:
             name = comp.get("name", "")
             metadata = comp.get("metadata")
@@ -164,6 +287,8 @@ class GoogleSearchPlugin(MaiBotPlugin):
                 continue
             if name == "web_search":
                 metadata["timeout_ms"] = web_search_timeout_ms
+            elif name == "reverse_image_search":
+                metadata["timeout_ms"] = reverse_image_timeout_ms
             state = states.get(name)
             if state is not None:
                 metadata["enabled"] = state[1]
@@ -183,6 +308,14 @@ class GoogleSearchPlugin(MaiBotPlugin):
             llm_timeout + self._WEB_SEARCH_NON_LLM_BUDGET_SECONDS,
         )
         return total_seconds * 1000
+
+    def _reverse_image_rpc_timeout_ms(self) -> int:
+        """为已启用引擎的串行回退、读图和返回结果留足时间。"""
+        try:
+            cfg = self.config
+        except RuntimeError:
+            cfg = GoogleSearchPluginConfig()
+        return reverse_rpc_budget(cfg.reverse_image, cfg.search_backend) * 1000
 
     async def _sync_component_states(self) -> None:
         """按当前配置热切换可开关组件的启用状态。
@@ -247,6 +380,13 @@ class GoogleSearchPlugin(MaiBotPlugin):
             engines_cfg=cfg.engines,
             backend_cfg=cfg.search_backend,
         )
+        # 反向以图搜图 pipeline
+        self._reverse_image_pipeline = ReverseImagePipeline(
+            reverse_cfg=cfg.reverse_image,
+            backend_cfg=cfg.search_backend,
+            content_fetcher=self._content_fetcher,
+            google_language=cfg.engines.google_language,
+        )
 
     async def _resolve_bot_name(self) -> str:
         """从全局 bot 配置取昵称(失败时兜底 '机器人')。"""
@@ -269,6 +409,7 @@ class GoogleSearchPlugin(MaiBotPlugin):
                 self._url_pipeline,
                 self._translator,
                 self._image_pipeline,
+                self._reverse_image_pipeline,
             )
         ):
             return True
@@ -420,83 +561,233 @@ class GoogleSearchPlugin(MaiBotPlugin):
         return {"name": "abbreviation_translate", "content": content}
 
     # ---------------------------------------------------------------- #
-    # Action: image_search
+    # Tool: image_search (已从弃用的 @Action 迁移为新版 Maisaka @Tool)
     # ---------------------------------------------------------------- #
 
-    @Action(
+    @Tool(
         "image_search",
-        description="当用户明确需要搜索图片时使用此动作。例如：'搜索一下猫的图片'、'来张风景图'。",
-        activation_type=ActivationType.ALWAYS,
-        action_parameters={"query": "需要搜索的图片关键词"},
-        action_require=[
-            "当用户明确表示想看、想搜索或想要一张图片时使用。",
-            "适用于'搜/找/来一张/发一张xx的图片'等指令。",
-            "如果用户只是在普通聊天中提到了某个事物，不代表他想要图片，此时不应使用。",
-            "一次只随机发送一张图片，30 分钟内不重复发送同一图片。",
+        description=(
+            "按关键词搜索候选图片（例如用户说“搜一下猫的图片”、“来张风景图”）。"
+            "仅在用户明确表示想看、想找或想要某类图片时调用；普通聊天提到某事物时不应使用。"
+            "工具会返回一张候选图片媒体（30 分钟内同关键词不重复），"
+            "如需发送给用户，请在 reply 工具的 attach_pic 中引用本次返回的 media_index。"
+        ),
+        parameters=[
+            ToolParameterInfo(
+                name="query",
+                param_type=ToolParamType.STRING,
+                description="需要搜索的图片关键词",
+                required=True,
+            ),
         ],
-        associated_types=["image"],
-        parallel_action=False,
     )
     async def handle_image_search(
         self,
         query: str = "",
-        stream_id: str = "",
         **kwargs: Any,
-    ) -> tuple[bool, str]:
-        """图片搜索入口。未启用时组件处于禁用态不暴露;此处短路仅防配置热更竞态。"""
+    ) -> dict[str, Any]:
+        """图片搜索入口（新版 Maisaka Tool 语义：通过 content_items 返回候选图片）。"""
+        if not (query or "").strip():
+            for alias in ("keyword", "q", "search_query"):
+                value = kwargs.get(alias)
+                if isinstance(value, str) and value.strip():
+                    query = value
+                    break
         del kwargs
 
         if not self.config.actions.image_search_enabled:
-            return False, "图片搜索功能未启用"
+            return {"name": "image_search", "success": False, "content": "图片搜索功能未启用"}
 
         query = (query or "").strip()
         if not query:
-            if stream_id:
-                await self.ctx.send.text("你想搜什么图片呀？", stream_id)
-            return False, "关键词为空"
+            return {"name": "image_search", "success": False, "content": "关键词为空，无法搜索图片。"}
 
         if not self._ensure_pipelines_ready():
-            return False, "图片搜索组件未就绪"
+            return {"name": "image_search", "success": False, "content": "图片搜索组件未就绪"}
 
         try:
             self.ctx.logger.info("开始图片搜索: %s", query)
-            status, b64, url = await self._image_pipeline.find_unique_image_b64(  # type: ignore[union-attr]
+            status, b64, url, mime_type = await self._image_pipeline.find_unique_image_media(  # type: ignore[union-attr]
                 query
             )
         except Exception as exc:  # noqa: BLE001
-            self.ctx.logger.error("图片搜索动作异常: %s", exc, exc_info=True)
-            if stream_id:
-                await self.ctx.send.text(f"搜索图片时出错了：{exc}", stream_id)
-            return False, f"图片搜索失败: {exc}"
+            self.ctx.logger.error("图片搜索工具异常: %s", exc, exc_info=True)
+            return {"name": "image_search", "success": False, "content": f"图片搜索失败：{exc}"}
 
-        if status == "ok":
-            try:
-                await self.ctx.send.image(b64, stream_id)
-                self.ctx.logger.info("成功发送图片 url=%s", url)
-                return True, "图片发送成功"
-            except Exception as exc:  # noqa: BLE001
-                self.ctx.logger.error("send.image 失败: %s", exc, exc_info=True)
-                if stream_id:
-                    await self.ctx.send.text("我下载好了图片，但是发送失败了...", stream_id)
-                return False, f"发送图片失败: {exc}"
+        if status == "ok" and b64 and mime_type:
+            effective_mime = mime_type
+            ext = effective_mime.split("/", 1)[-1].replace("jpeg", "jpg") or "jpg"
+            self.ctx.logger.info("图片搜索成功 url=%s mime=%s", url, effective_mime)
+            return {
+                "name": "image_search",
+                "success": True,
+                "content": (
+                    f"已为「{query}」找到一张候选图片（来源：{url or '未知'}）。"
+                    "如果确认图片合适并需要发送给用户，请在 reply 工具的 attach_pic 中填写本次返回的 media_index。"
+                ),
+                "content_items": [
+                    {
+                        "content_type": "image",
+                        "data": b64,
+                        "mime_type": effective_mime,
+                        "name": f"image_search.{ext}",
+                        "description": f"关键词「{query}」的搜索结果图片",
+                        "metadata": {"source_url": url or ""},
+                    }
+                ],
+            }
 
         if status == "no_results":
-            if stream_id:
-                await self.ctx.send.text(f"我没找到关于「{query}」的图片呢。", stream_id)
-            return False, "未找到图片"
+            return {"name": "image_search", "success": False, "content": f"没有找到关于「{query}」的图片。"}
 
         if status == "no_unique":
-            if stream_id:
-                await self.ctx.send.text(
-                    "最近30分钟内已经发过相关图片了，先休息一下吧。",
-                    stream_id,
-                )
-            return False, "30 分钟内图片重复"
+            return {
+                "name": "image_search",
+                "success": False,
+                "content": f"最近 30 分钟内已经返回过关于「{query}」的候选图片，暂无不重复的新图。",
+            }
 
-        # all_failed
-        if stream_id:
-            await self.ctx.send.text("找到了图片，但下载都失败了，可能是网络问题。", stream_id)
-        return False, "所有图片下载失败"
+        return {
+            "name": "image_search",
+            "success": False,
+            "content": f"找到了关于「{query}」的候选图片，但下载全部失败，可能是网络问题。",
+        }
+
+    # ---------------------------------------------------------------- #
+    # Tool: reverse_image_search (以图搜图 / 识图)
+    # ---------------------------------------------------------------- #
+
+    @Tool(
+        "reverse_image_search",
+        description=(
+            "以图搜图/识图工具。当聊天中出现不认识的角色、表情包、二创图、梗图、截图、画师作品或物体，"
+            "想要查找图片出处、角色身份、网络梗背景或关联网页信息时调用。"
+            "可传入聊天图片所在消息的 msg_id（以及可选图片序号 image_index），或直接传入图片链接 image_url。"
+            "工具会返回图片关联的网页标题、链接与参考信息，供你直接结合上下文总结回复。"
+        ),
+        parameters=[
+            ToolParameterInfo(
+                name="msg_id",
+                param_type=ToolParamType.STRING,
+                description=(
+                    "可选：待识别图片所在的上下文消息编号（支持短编号）或工具媒体索引 "
+                    "tool_result:<call_id>:<item_index>；与 image_url 二选一。"
+                ),
+                required=False,
+            ),
+            ToolParameterInfo(
+                name="image_index",
+                param_type=ToolParamType.INTEGER,
+                description="可选：同一条消息中的图片序号（从 0 开始，默认 0）。",
+                required=False,
+            ),
+            ToolParameterInfo(
+                name="image_url",
+                param_type=ToolParamType.STRING,
+                description="可选：待识别图片的公网 HTTP/HTTPS 链接；与 msg_id 二选一。",
+                required=False,
+            ),
+        ],
+    )
+    async def handle_reverse_image_search(
+        self,
+        msg_id: str = "",
+        image_index: int = 0,
+        image_url: str = "",
+        stream_id: str = "",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """以图搜图入口（优先读取 Maisaka 上下文图片，走 Google Lens → Yandex → Bing）。"""
+        source_id = (msg_id or "").strip()
+        if not source_id:
+            for alias in ("source_id", "media_index", "message_id"):
+                value = kwargs.get(alias)
+                if isinstance(value, str) and value.strip():
+                    source_id = value.strip()
+                    break
+
+        if not (image_url or "").strip():
+            for alias in ("url", "img_url"):
+                value = kwargs.get(alias)
+                if isinstance(value, str) and value.strip():
+                    image_url = value.strip()
+                    break
+
+        if image_index == 0 and "index" in kwargs and isinstance(kwargs.get("index"), int):
+            image_index = kwargs["index"]
+        del kwargs
+
+        def failure(message: str) -> dict[str, Any]:
+            return {"name": "reverse_image_search", "success": False, "content": message, "error": message}
+
+        if not self.config.reverse_image.enabled:
+            return failure("以图搜图功能未启用")
+
+        if not isinstance(image_index, int) or isinstance(image_index, bool) or image_index < 0:
+            return failure("图片序号必须是非负整数。")
+
+        cleaned_url = (image_url or "").strip()
+        if source_id and cleaned_url:
+            return failure("聊天图片和图片链接只能选一个。")
+        if not source_id and not cleaned_url:
+            return failure("请提供图片所在的消息编号或图片链接。")
+
+        if not self._ensure_pipelines_ready():
+            return failure("以图搜图组件未就绪")
+
+        started = time.perf_counter()
+        image_bytes: Optional[bytes] = None
+        image_hash = ""
+
+        if source_id:
+            normalized_stream_id = (stream_id or "").strip()
+            if not normalized_stream_id:
+                return failure("缺少当前会话信息，无法按消息编号读取图片。")
+            try:
+                resolved = await self.ctx.maisaka.context.resolve_image(
+                    normalized_stream_id,
+                    source_id,
+                    index=image_index,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.ctx.logger.error("读取上下文图片失败: %s", exc, exc_info=True)
+                return failure("读取聊天图片失败，请查看插件日志。")
+            if not isinstance(resolved, dict) or not resolved.get("success"):
+                err = resolved.get("error", "未知错误") if isinstance(resolved, dict) else str(resolved)
+                return failure(f"无法获取目标图片（{err}）。")
+            image_payload = resolved.get("image") or {}
+            if not isinstance(image_payload, dict):
+                return failure("宿主返回的图片数据无效。")
+            raw_b64 = str(image_payload.get("binary_data_base64") or "").strip()
+            image_hash = str(image_payload.get("binary_hash") or "").strip()
+            if not raw_b64:
+                return failure("目标图片数据为空，无法识别。")
+            if len(raw_b64) > 4 * ((MAX_IMAGE_BYTES + 2) // 3):
+                return failure("图片超过 15 MiB。")
+            try:
+                image_bytes = base64.b64decode(raw_b64, validate=True)
+            except ValueError:
+                return failure("无法解码宿主返回的图片数据。")
+
+        try:
+            self.ctx.logger.info(
+                "开始以图搜图（%s，准备输入 %.3f 秒）",
+                "聊天图片" if source_id else "图片链接",
+                time.perf_counter() - started,
+            )
+            content = await self._reverse_image_pipeline.run(  # type: ignore[union-attr]
+                image_bytes=image_bytes,
+                image_url=cleaned_url,
+                image_hash=image_hash,
+            )
+            return {"name": "reverse_image_search", "success": True, "content": content}
+        except ValueError as exc:
+            return failure(f"以图搜图失败：{exc}")
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.logger.error("reverse_image_search 执行异常: %s", exc, exc_info=True)
+            return failure("以图搜图执行失败，请查看插件日志。")
+        finally:
+            self.ctx.logger.info("以图搜图调用结束，总耗时 %.3f 秒", time.perf_counter() - started)
 
     # ---------------------------------------------------------------- #
     # 诊断命令
@@ -538,6 +829,15 @@ class GoogleSearchPlugin(MaiBotPlugin):
         if e.deepseek_enabled:
             enabled_engines.append("deepseek")
 
+        ri = cfg.reverse_image
+        enabled_ri_engines = []
+        if ri.google_lens_enabled:
+            enabled_ri_engines.append("google_lens")
+        if ri.yandex_enabled:
+            enabled_ri_engines.append("yandex")
+        if ri.bing_enabled:
+            enabled_ri_engines.append("bing")
+
         ready = all(
             v is not None
             for v in (
@@ -548,15 +848,22 @@ class GoogleSearchPlugin(MaiBotPlugin):
                 self._url_pipeline,
                 self._translator,
                 self._image_pipeline,
+                self._reverse_image_pipeline,
             )
         )
 
+        ri_status = (
+            f"已启用 ({', '.join(enabled_ri_engines) if enabled_ri_engines else '无可用子引擎'})"
+            if ri.enabled
+            else "未启用"
+        )
         lines = [
             f"google_search_plugin v{cfg.plugin.version}",
             f"模型 task: {cfg.models.model_name}  温度: {cfg.models.temperature}",
             f"默认引擎: {cfg.search_backend.default_engine}",
             f"启用引擎: {', '.join(enabled_engines) if enabled_engines else '(无)'}",
             f"图片搜索: {'已启用' if cfg.actions.image_search_enabled else '未启用'}",
+            f"以图搜图: {ri_status}",
             f"缩写翻译: {'已启用' if cfg.translation.enabled else '未启用'}",
             f"组件就绪: {'是' if ready else '否'}",
         ]

@@ -16,13 +16,13 @@ import time
 from collections import deque
 from typing import TYPE_CHECKING, Literal, Optional
 
-import aiohttp
-
 from ..search_engines.bing import BingEngine
 from ..search_engines.duckduckgo import DuckDuckGoEngine
+from ..search_engines.reverse_image.base import verify_image_data
 from ..search_engines.sogou import SogouEngine
 from ..search_engines.you import YouImagesEngine
 from .engine_chain import _build_common_cfg, _build_engine_dict
+from .public_fetch import MAX_IMAGE_BYTES, fetch_public_resource
 
 if TYPE_CHECKING:
     from ..config import EnginesSection, SearchBackendSection
@@ -87,23 +87,31 @@ class ImageSearchPipeline:
         self,
         query: str,
     ) -> tuple[ImageSearchStatus, Optional[str], Optional[str]]:
-        """搜索 + 去重 + 下载 + base64。
+        """搜索 + 去重 + 下载 + base64（保留向后兼容签名）。"""
+        status, b64, url, _ = await self.find_unique_image_media(query)
+        return (status, b64, url)
+
+    async def find_unique_image_media(
+        self,
+        query: str,
+    ) -> tuple[ImageSearchStatus, Optional[str], Optional[str], str]:
+        """搜索 + 去重 + 下载 + base64 + MIME 类型。
 
         Args:
             query: 关键词
 
         Returns:
-            ``(status, base64, picked_url)``:
+            ``(status, base64, picked_url, mime_type)``:
 
-            - ``("ok", "<base64>", "<url>")`` 找到并下载成功
-            - ``("no_results", None, None)`` 所有引擎都没返回结果
-            - ``("no_unique", None, None)`` 所有候选都在 30 分钟内发送过
-            - ``("all_failed", None, None)`` 候选有,但下载全失败
+            - ``("ok", "<base64>", "<url>", "<mime_type>")`` 找到并下载成功
+            - ``("no_results", None, None, "")`` 所有引擎都没返回结果
+            - ``("no_unique", None, None, "")`` 所有候选都在 30 分钟内发送过
+            - ``("all_failed", None, None, "")`` 候选有,但下载全失败
         """
         # ---- 1. 引擎链 fallback 搜索 ---- #
         image_results = await self._search_with_fallback(query)
         if not image_results:
-            return ("no_results", None, None)
+            return ("no_results", None, None, "")
 
         # ---- 2. 提取 URL + 去重 ---- #
         image_urls: list[str] = []
@@ -115,7 +123,7 @@ class ImageSearchPipeline:
             seen.add(url)
             image_urls.append(url)
         if not image_urls:
-            return ("no_results", None, None)
+            return ("no_results", None, None, "")
 
         history = self._image_history.get(query)
         if history is None:
@@ -132,21 +140,24 @@ class ImageSearchPipeline:
         }
         candidates = [u for u in image_urls if u not in recent_urls]
         if not candidates:
-            return ("no_unique", None, None)
+            return ("no_unique", None, None, "")
 
         random.shuffle(candidates)
 
         # ---- 3. 依次下载 ---- #
-        async with aiohttp.ClientSession(trust_env=True) as session:
-            for url in candidates:
-                if not url:
-                    continue
-                image_data = await self._fetch_image(session, url)
-                if image_data:
-                    b64 = base64.b64encode(image_data).decode("utf-8")
-                    history.append((url, time.time()))
-                    return ("ok", b64, url)
-        return ("all_failed", None, None)
+        for url in candidates:
+            try:
+                resource = await fetch_public_resource(
+                    url, proxy=self._backend_cfg.proxy, timeout=10, max_bytes=MAX_IMAGE_BYTES,
+                )
+                mime_type = await asyncio.to_thread(verify_image_data, resource.body)
+            except (OSError, ValueError) as exc:
+                logger.debug("跳过不可用的候选图片: %s", type(exc).__name__)
+                continue
+            b64 = base64.b64encode(resource.body).decode("utf-8")
+            history.append((url, time.time()))
+            return ("ok", b64, url, mime_type)
+        return ("all_failed", None, None, "")
 
     # ------------------------------------------------------------------ #
     # 内部:多引擎 fallback 搜索
@@ -193,15 +204,3 @@ class ImageSearchPipeline:
                 continue
 
         return []
-
-    @staticmethod
-    async def _fetch_image(session: aiohttp.ClientSession, url: str) -> Optional[bytes]:
-        try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                if response.status == 200:
-                    return await response.read()
-        except asyncio.TimeoutError:
-            logger.warning("下载图片超时: %s", url)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("下载图片失败 %s: %s", url, exc)
-        return None
