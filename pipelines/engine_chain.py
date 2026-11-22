@@ -15,6 +15,7 @@ from ..search_engines.bing import BingEngine
 from ..search_engines.deepseek import DeepSeekEngine
 from ..search_engines.duckduckgo import DuckDuckGoEngine
 from ..search_engines.exa import ExaEngine
+from ..search_engines.keenable import KeenableEngine
 from ..search_engines.google import GoogleEngine
 from ..search_engines.sogou import SogouEngine
 from ..search_engines.tavily import TavilyEngine
@@ -111,6 +112,14 @@ def _build_engine_dict(
                 "livecrawl_timeout_ms": engines.exa_livecrawl_timeout_ms,
             }
         )
+    elif engine_name == "keenable":
+        cfg.update(
+            {
+                "enabled": engines.keenable_enabled,
+                "api_keys": list(engines.keenable_api_keys),
+                "published_after": engines.keenable_published_after,
+            }
+        )
     elif engine_name == "deepseek":
         cfg.update(
             {
@@ -179,6 +188,7 @@ class EngineChain:
         self.tavily = TavilyEngine(_build_engine_dict("tavily", engines, common))
         self.anysearch = AnySearchEngine(_build_engine_dict("anysearch", engines, common))
         self.exa = ExaEngine(_build_engine_dict("exa", engines, common))
+        self.keenable = KeenableEngine(_build_engine_dict("keenable", engines, common))
         self.deepseek = DeepSeekEngine(_build_engine_dict("deepseek", engines, common))
         self.you = YouSearchEngine(_build_engine_dict("you", engines, common))
         self.you_news = YouLiveNewsEngine(_build_engine_dict("you_news", engines, common))
@@ -213,6 +223,7 @@ class EngineChain:
             ("tavily", self.tavily),
             ("anysearch", self.anysearch),
             ("exa", self.exa),
+            ("keenable", self.keenable),
             ("you", self.you),
             ("you_news", self.you_news),
             ("google", self.google),

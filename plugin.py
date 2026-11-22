@@ -822,6 +822,8 @@ class GoogleSearchPlugin(MaiBotPlugin):
             enabled_engines.append("anysearch")
         if e.exa_enabled:
             enabled_engines.append("exa")
+        if e.keenable_enabled:
+            enabled_engines.append("keenable")
         if e.you_enabled:
             enabled_engines.append("you")
         if e.you_news_enabled:

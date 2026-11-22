@@ -109,7 +109,7 @@ class ConfigUiSchemaTests(unittest.TestCase):
     def test_api_key_lists_are_in_their_provider_blocks_with_plaintext_warnings(self) -> None:
         self.assertNotIn("api_keys", self.ui["sections"])
         engines_tab = self.ui["layout"]["tabs"][1]
-        for provider in ("tavily", "anysearch", "exa", "you", "deepseek"):
+        for provider in ("tavily", "anysearch", "exa", "keenable", "you", "deepseek"):
             with self.subTest(provider=provider):
                 section = self.ui["sections"][provider]
                 self.assertIn(provider, engines_tab["sections"])

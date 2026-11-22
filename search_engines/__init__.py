@@ -8,6 +8,7 @@ from .anysearch import AnySearchEngine
 from .base import BaseSearchEngine, SearchResult
 from .deepseek import DeepSeekEngine
 from .exa import ExaEngine
+from .keenable import KeenableEngine
 from .google import GoogleEngine
 from .bing import BingEngine
 from .sogou import SogouEngine
@@ -20,6 +21,7 @@ __all__ = [
     "AnySearchEngine",
     "DeepSeekEngine",
     "ExaEngine",
+    "KeenableEngine",
     "GoogleEngine",
     "BingEngine",
     "SogouEngine",
