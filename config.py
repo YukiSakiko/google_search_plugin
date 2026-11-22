@@ -81,7 +81,7 @@ class SearchBackendSection(PluginConfigBase):
     __ui_order__ = 3
 
     default_engine: Literal[
-        "google", "bing", "sogou", "duckduckgo", "tavily", "anysearch", "exa", "you", "you_news", "deepseek"
+        "google", "bing", "sogou", "duckduckgo", "tavily", "anysearch", "exa", "keenable", "you", "you_news", "deepseek"
     ] = Field(
         default="bing",
         description="默认搜索引擎",
@@ -221,6 +221,16 @@ class EnginesSection(PluginConfigBase):
     )
     exa_livecrawl_timeout_ms: int = Field(
         default=0, ge=0, le=90000, description="Exa 服务端获取内容的超时毫秒数；0 使用默认值，lite 仅支持 0"
+    )
+
+    # Keenable
+    keenable_enabled: bool = Field(default=False, description="是否启用 Keenable 搜索")
+    keenable_api_keys: list[str] = Field(
+        default_factory=list,
+        description="Keenable API key 列表，每项一把密钥；多个密钥随机尝试，留空使用匿名接口（按 IP 限流）",
+    )
+    keenable_published_after: str = Field(
+        default="", description="只返回此时间之后发布的网页，例如 7d、1mo 或 2026-01-01；留空不限"
     )
 
     @field_validator("anysearch_zone", mode="before")

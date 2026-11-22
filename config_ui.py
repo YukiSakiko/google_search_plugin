@@ -91,6 +91,12 @@ _SECTIONS = {
         "语义检索与研究资料查找；需可访问 Exa API 的网络环境。",
         {"exa_enabled": "启用 Exa", "exa_api_keys": "API 密钥列表"},
     ),
+    "keenable": _Section(
+        "engines",
+        "Keenable",
+        "网页检索，可不填密钥使用匿名接口；需可访问 Keenable API 的网络环境。",
+        {"keenable_enabled": "启用 Keenable", "keenable_api_keys": "API 密钥列表"},
+    ),
     "you": _Section(
         "engines",
         "You Search",
@@ -155,6 +161,12 @@ _SECTIONS = {
             "anysearch_params": "底层引擎参数（JSON）",
             "anysearch_format": "返回内容格式",
         },
+    ),
+    "keenable_advanced": _Section(
+        "engines",
+        "Keenable 搜索参数",
+        "按需限制网页发布时间。",
+        {"keenable_published_after": "最早发布时间"},
     ),
     "you_advanced": _Section(
         "engines",
@@ -259,7 +271,7 @@ _TABS = {
     "basic": ("常用设置", ("search", "model", "images", "reverse_image", "translation", "plugin")),
     "engines": (
         "搜索引擎",
-        ("google", "bing", "sogou", "duckduckgo", "tavily", "anysearch", "exa", "you", "deepseek"),
+        ("google", "bing", "sogou", "duckduckgo", "tavily", "anysearch", "exa", "keenable", "you", "deepseek"),
     ),
     "advanced": (
         "高级设置",
@@ -272,6 +284,7 @@ _TABS = {
             "anysearch_advanced",
             "exa_advanced",
             "exa_content",
+            "keenable_advanced",
             "you_advanced",
             "you_extensions",
             "deepseek_advanced",
@@ -350,6 +363,8 @@ def build_config_ui_schema(schema: dict[str, Any]) -> dict[str, Any]:
                     field["placeholder"] = "添加一把 API 密钥"
                     if field_name == "anysearch_api_keys":
                         field["hint"] = "留空可使用 AnySearch 匿名搜索，额度由服务端限制。" + field["hint"]
+                    if field_name == "keenable_api_keys":
+                        field["hint"] = "留空可使用 Keenable 匿名接口，按 IP 限流。" + field["hint"]
                 if section_id == "plugin_info":
                     field["disabled"] = True
                 fields[field_name] = field
