@@ -23,6 +23,7 @@ _ENGINE_NAMES = (
     "tavily",
     "anysearch",
     "exa",
+    "keenable",
     "you",
     "you_news",
     "google",
@@ -79,7 +80,7 @@ class DirectSearchPipelineTests(unittest.IsolatedAsyncioTestCase):
             ),
             _result("Title only", url="https://example.com/title", content="", abstract="", snippet=""),
         ]
-        for engine_name in ("anysearch", "exa"):
+        for engine_name in ("anysearch", "exa", "keenable"):
             for fetch_content in (False, True):
                 with self.subTest(engine=engine_name, fetch_content=fetch_content):
                     pipeline, engines, fetcher, llm = _pipeline(engine_name, results, fetch_content=fetch_content)
@@ -127,6 +128,16 @@ class DirectSearchPipelineTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn(result.url, answer)
                     fetcher.fetch_batch.assert_not_awaited()
                     llm.generate.assert_not_awaited()
+
+    async def test_keenable_returns_the_whole_snippet_even_with_a_short_page_limit(self) -> None:
+        snippet = "first paragraph\n\n" + "long text " * 600 + "answer at the end"
+        result = _result(content="", abstract=snippet, snippet=snippet)
+        pipeline, _, fetcher, llm = _pipeline("keenable", [result])
+        pipeline._backend.max_content_length = 100
+        answer = await pipeline.run("question", bot_name="Test bot")
+        self.assertEqual(answer, f"1. [{result.title}]({result.url})\n{snippet}")
+        fetcher.fetch_batch.assert_not_awaited()
+        llm.generate.assert_not_awaited()
 
     async def test_deepseek_summary_still_returns_directly_with_external_references(self) -> None:
         summary = _result("DeepSeek Summary", url="", content="DeepSeek server answer", rank=-1)
@@ -199,7 +210,7 @@ class NewEngineFallbackTests(unittest.IsolatedAsyncioTestCase):
         return chain
 
     async def test_new_default_engine_runs_first_and_success_stops_fallback(self) -> None:
-        for default in ("anysearch", "exa"):
+        for default in ("anysearch", "exa", "keenable"):
             with self.subTest(default=default):
                 chain = self.make_chain(default=default, enabled=_ENGINE_NAMES)
                 results = [_result()]

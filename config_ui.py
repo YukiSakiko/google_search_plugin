@@ -296,7 +296,10 @@ _TABS = {
 
 _HINTS = {
     "search_backend.default_engine": "优先使用的网页搜索引擎，需在搜索引擎页同时启用；失败或无结果时自动切换其他已启用引擎。",
-    "search_backend.max_results": "每次搜索期望返回的结果数量；实际数量取决于搜索引擎。",
+    "search_backend.max_results": (
+        "每次网页搜索期望返回的条数。Keenable 单次最多提供 50 条，实际结果可能更少。"
+        "插件会保留 Keenable 返回的完整片段；想减少返回内容，可调低条数。"
+    ),
     "search_backend.fetch_content": "搜索后额外抓取网页正文。关闭可减少请求和延迟，不影响引擎自带的内容或答案。",
     "search_backend.proxy": "搜索请求和普通网页抓取使用的显式 HTTP/HTTPS 代理；留空不指定代理，部分请求仍可能使用环境代理。并非所有引擎或图片下载都使用此设置。",
     "search_backend.timeout": "单个搜索请求的超时秒数；多密钥尝试或引擎降级时耗时可能累加，并非整个搜索流程的总超时。",
@@ -304,6 +307,10 @@ _HINTS = {
     "models.model_name": "搜索结果总结使用的宿主模型任务，通常保持 replyer；具体模型由麦麦对应任务的配置决定。",
     "models.temperature": "本地搜索总结的生成温度；不影响 DeepSeek 服务端直接生成的答案。",
     "models.llm_timeout_seconds": "单次本地 LLM 总结调用的超时秒数，并非整个搜索流程的总超时。",
+    "engines.keenable_enabled": (
+        "启用后，即使没有设为默认引擎，其他引擎未找到结果或请求失败时，也可能将搜索内容发送给 Keenable。"
+        "无论是否填写密钥，服务商默认都会记录搜索内容、搜索结果和 IP 地址。"
+    ),
     "engines.you_contents_force": "允许对其他引擎的结果使用 You Contents；仍需开启网页正文抓取和 You Contents，并提供有效密钥。",
     "engines.you_images_enabled": "需账号开通 early access 权限，并在常用设置开启图片搜索；与 You Search、Contents 共用搜索引擎页的 You 密钥列表。",
     "engines.anysearch_params": "可选的 JSON 对象字符串，仅填写对应底层引擎支持的参数；留空不额外传参。",

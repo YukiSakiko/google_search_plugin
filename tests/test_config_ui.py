@@ -126,6 +126,14 @@ class ConfigUiSchemaTests(unittest.TestCase):
                 self.assertIn("明文", field["hint"])
                 self.assertEqual(field["placeholder"], "添加一把 API 密钥")
 
+    def test_keenable_discloses_fallback_and_data_collection_next_to_switch(self) -> None:
+        hint = self.ui["sections"]["keenable"]["fields"]["keenable_enabled"]["hint"]
+        for phrase in ("默认引擎", "发送", "无论是否填写密钥", "记录搜索内容、搜索结果和 IP 地址"):
+            self.assertIn(phrase, hint)
+        count_hint = self.ui["sections"]["search"]["fields"]["max_results"]["hint"]
+        self.assertIn("50", count_hint)
+        self.assertIn("完整片段", count_hint)
+
     def test_cookie_uses_password_input_and_only_plugin_metadata_is_read_only(self) -> None:
         expected_secrets = {("search_backend", "zhihu_cookies"), ("reverse_image", "google_lens_cookies")}
         password_fields = {
@@ -174,6 +182,9 @@ class ConfigUiSchemaTests(unittest.TestCase):
             ("tavily", "tavily_api_keys"): ["fake-tavily-key"],
             ("anysearch", "anysearch_api_keys"): ["fake-anysearch-key"],
             ("exa", "exa_api_keys"): ["fake-exa-key"],
+            ("keenable", "keenable_enabled"): True,
+            ("keenable", "keenable_api_keys"): ["fake-keenable-key"],
+            ("keenable_advanced", "keenable_published_after"): "7d",
             ("anysearch_advanced", "anysearch_zone"): "cn",
             ("anysearch_advanced", "anysearch_language"): "zh",
             ("anysearch_advanced", "anysearch_params"): '{"page": 2}',
@@ -206,12 +217,12 @@ class ConfigUiSchemaTests(unittest.TestCase):
 
     def test_new_engines_are_selectable_and_exa_type_is_in_advanced_settings(self) -> None:
         choices = self.ui["sections"]["search"]["fields"]["default_engine"]["choices"]
-        for provider in ("anysearch", "exa"):
+        for provider, enabled_by_default in (("anysearch", True), ("exa", False), ("keenable", False)):
             with self.subTest(provider=provider):
                 self.assertIn(provider, choices)
                 config = GoogleSearchPluginConfig.model_validate({"search_backend": {"default_engine": provider}})
                 self.assertEqual(config.search_backend.default_engine, provider)
-                self.assertFalse(getattr(config.engines, f"{provider}_enabled"))
+                self.assertEqual(getattr(config.engines, f"{provider}_enabled"), enabled_by_default)
         section = self.ui["sections"]["exa_advanced"]
         self.assertTrue(section["collapsed"])
         self.assertEqual(section["name"], "engines")
@@ -223,6 +234,7 @@ class ConfigUiSchemaTests(unittest.TestCase):
 
     def test_new_provider_options_are_grouped_in_collapsed_advanced_blocks(self) -> None:
         expected_fields = {
+            "keenable_advanced": {"keenable_published_after"},
             "anysearch_advanced": {
                 "anysearch_tag",
                 "anysearch_zone",

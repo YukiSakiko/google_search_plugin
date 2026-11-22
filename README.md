@@ -22,14 +22,16 @@ uv pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 想更换搜索引擎时：
 
 1. 在“搜索引擎”页启用需要的引擎。
-2. 使用 Tavily、AnySearch、Exa、Keenable、You 或 DeepSeek 时，在对应的 API 密钥列表中添加密钥（AnySearch 和 Keenable 可留空）。**只有一把密钥也填列表的一项**；多把密钥每项一把，会自动随机轮换。
+2. 需要密钥的引擎每项填一把，多把密钥会随机轮换。AnySearch 和 Keenable 可留空。
 3. 在“常用设置”选择默认引擎；使用 Google 等需要代理的网络环境时，按需填写代理地址。
 
 选择默认引擎不会自动启用它，需先完成第 1 步。
 总结直接复用麦麦的模型任务，通常无需额外配置模型接口。
 
-Tavily、You、AnySearch 和 Exa 的密钥可分别前往 [Tavily](https://app.tavily.com)、[You](https://you.com/platform)、[AnySearch](https://anysearch.com) 和 [Exa](https://exa.ai) 官网获取。
-Keenable 默认关闭。不填密钥时走匿名接口，按 IP 限流；密钥可在 [Keenable 控制台](https://app.keenable.ai) 获取。按 Keenable 默认的数据政策，不论是否填写密钥，搜索内容、结果和 IP 都会被记录（见 [Data and privacy](https://docs.keenable.ai/data-privacy)），不要在搜索中发送隐私信息。
+密钥申请：[Tavily](https://app.tavily.com)、[You](https://you.com/platform)、[AnySearch](https://anysearch.com)、[Exa](https://exa.ai)、[Keenable](https://app.keenable.ai)。
+
+Keenable 默认关闭。启用后直接返回完整片段，条数可在「常用设置」调整。无论是否填写密钥，服务商[默认记录搜索词、结果和 IP 地址](https://docs.keenable.ai/data-privacy)。
+
 作者提供的临时邮箱：[邮箱 1](https://xiaowan258.me)、[邮箱 2](https://mail.xiaowan.me)。
 
 ## 配置入口
@@ -81,7 +83,7 @@ uv run --no-sync python plugins/google_search_plugin/tools/probe_reverse_image.p
 
 [MaiBot](https://github.com/MaiM-with-u/MaiBot)
 
-感谢 [heitiehu-beep](https://github.com/heitiehu-beep)、[wanshangovo](https://github.com/wanshangovo) 提供的代码优化与改进。
+感谢 [heitiehu-beep](https://github.com/heitiehu-beep)、[wanshangovo](https://github.com/wanshangovo)、[KGKallasmaa](https://github.com/KGKallasmaa) 对插件的贡献。
 
 ## Star History
 

@@ -16,6 +16,8 @@ from maibot_sdk import Field, PluginConfigBase
 # Sections
 # ---------------------------------------------------------------------------
 
+PLUGIN_VERSION = "4.2.2"
+
 
 class PluginSection(PluginConfigBase):
     """插件基础信息"""
@@ -25,9 +27,15 @@ class PluginSection(PluginConfigBase):
     __ui_order__ = 0
 
     name: str = Field(default="google_search", description="插件名称")
-    version: str = Field(default="4.1.1", description="插件版本")
-    config_version: str = Field(default="4.3.0", description="配置版本(Runner 用于兼容性校验)")
+    version: str = Field(default=PLUGIN_VERSION, description="插件版本")
+    config_version: str = Field(default="4.4.0", description="配置版本(Runner 用于兼容性校验)")
     enabled: bool = Field(default=True, description="是否启用插件")
+
+    @field_validator("version")
+    @classmethod
+    def use_installed_version(cls, _value: str) -> str:
+        # 宿主升级时保留已有字段，版本号应反映安装的插件，而非旧配置。
+        return PLUGIN_VERSION
 
 
 class ModelsSection(PluginConfigBase):

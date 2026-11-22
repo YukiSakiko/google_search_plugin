@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -29,21 +30,52 @@ class KeenableEngine(BaseSearchEngine, ApiKeyMixin):
         payload: Dict[str, Any] = {"query": query, "max_results": limit}
         if self.published_after:
             payload["published_after"] = self.published_after
-        timeout = aiohttp.ClientTimeout(total=self.TIMEOUT)
+        items = await self._request_items(payload)
+        results: List[SearchResult] = []
+        seen_urls = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            raw_url = item.get("url")
+            url = raw_url.strip() if isinstance(raw_url, str) else ""
+            if not self._is_valid_url(url) or any(char.isspace() for char in url) or url in seen_urls:
+                continue
+            raw_title = item.get("title")
+            title = self.tidy_text(raw_title) if isinstance(raw_title, str) else ""
+            snippet = ""
+            for field in ("snippet", "description"):
+                value = item.get(field)
+                if isinstance(value, str):
+                    snippet = value.strip()
+                    if snippet:
+                        break
+            seen_urls.add(url)
+            results.append(
+                SearchResult(title=title or url, url=url, snippet=snippet, abstract=snippet, rank=len(results))
+            )
+            if len(results) == limit:
+                break
+        return results
+
+    async def _request_items(self, payload: Dict[str, Any]) -> List[Any]:
         # A configured key never falls back to the keyless endpoint.
         api_keys: List[Optional[str]] = list(self._iter_api_keys()) or [None]
-
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            for api_key in api_keys:
-                headers = {
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "X-Keenable-Title": self.CLIENT_TITLE,
-                }
-                if api_key:
-                    headers["X-API-Key"] = api_key
-                endpoint = self.SEARCH_ENDPOINT if api_key else self.PUBLIC_ENDPOINT
-                try:
+        # The outer deadline is shared by all keys; avoid a second, per-request timer.
+        deadline = self.TIMEOUT if self.TIMEOUT > 0 else None
+        try:
+            async with (
+                asyncio.timeout(deadline),
+                aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None)) as session,
+            ):
+                for api_key in api_keys:
+                    headers = {
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "X-Keenable-Title": self.CLIENT_TITLE,
+                    }
+                    if api_key:
+                        headers["X-API-Key"] = api_key
+                    endpoint = self.SEARCH_ENDPOINT if api_key else self.PUBLIC_ENDPOINT
                     async with session.post(
                         f"{self.BASE_URL}{endpoint}",
                         json=payload,
@@ -57,48 +89,13 @@ class KeenableEngine(BaseSearchEngine, ApiKeyMixin):
                                 response.status,
                                 mask_api_key(api_key),
                             )
-                            continue
+                            # Only an invalid credential can be fixed with a different key.
+                            if response.status == 401 and api_key:
+                                continue
+                            return []
                         data = json.loads(await response.text())
-                except Exception as exc:
-                    logger.warning(
-                        "Keenable request failed: exception=%s, key=%s",
-                        type(exc).__name__,
-                        mask_api_key(api_key),
-                    )
-                    continue
-
-                items = data.get("results") if isinstance(data, dict) else None
-                if not isinstance(items, list):
-                    continue
-                if not items:
-                    return []
-
-                results: List[SearchResult] = []
-                seen_urls = set()
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
-                    raw_url = item.get("url")
-                    url = raw_url.strip() if isinstance(raw_url, str) else ""
-                    if not self._is_valid_url(url) or any(char.isspace() for char in url) or url in seen_urls:
-                        continue
-                    raw_title = item.get("title")
-                    title = self.tidy_text(raw_title) if isinstance(raw_title, str) else ""
-                    raw_snippet = item.get("snippet") or item.get("description")
-                    snippet = self.tidy_text(raw_snippet) if isinstance(raw_snippet, str) else ""
-                    seen_urls.add(url)
-                    results.append(
-                        SearchResult(
-                            title=title or url,
-                            url=url,
-                            snippet=snippet,
-                            abstract=snippet,
-                            rank=len(results),
-                        )
-                    )
-                    if len(results) == limit:
-                        break
-                if results:
-                    return results
-
+                        items = data.get("results") if isinstance(data, dict) else None
+                        return items if isinstance(items, list) else []
+        except (aiohttp.ClientError, OSError, ValueError) as exc:
+            logger.warning("Keenable request failed: exception=%s", type(exc).__name__)
         return []

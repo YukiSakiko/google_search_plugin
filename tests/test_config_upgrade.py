@@ -30,7 +30,7 @@ with patch.dict(sys.modules, {"src.common.logger": _HOST_LOGGER}):
     from src.plugin_runtime.runner.runner_main import PluginRunner
 
 _NEW_ENGINE_DEFAULTS = {
-    "anysearch_enabled": False,
+    "anysearch_enabled": True,
     "anysearch_api_keys": [],
     "exa_enabled": False,
     "exa_api_keys": [],
@@ -85,6 +85,8 @@ class RunnerConfigUpgradeTests(unittest.TestCase):
             if name.startswith(("anysearch_", "exa_"))
         }
         self.assertGreaterEqual(defaults.keys(), _NEW_ENGINE_DEFAULTS.keys())
+        for name, expected in _NEW_ENGINE_DEFAULTS.items():
+            self.assertEqual(defaults[name], expected)
         for name, expected in defaults.items():
             with self.subTest(field=name):
                 self.assertEqual(config["engines"][name], expected)
@@ -120,6 +122,41 @@ class RunnerConfigUpgradeTests(unittest.TestCase):
         self.assertEqual(
             persisted["plugin"]["config_version"], self.plugin.build_default_config()["plugin"]["config_version"]
         )
+
+    def test_430_upgrade_writes_keenable_defaults_and_keeps_existing_settings(self) -> None:
+        raw = self.plugin.build_default_config()
+        raw["plugin"].update(version="4.1.1", config_version="4.3.0", enabled=False)
+        engines = raw["engines"]
+        for field in tuple(engines):
+            if field.startswith("keenable_"):
+                del engines[field]
+        engines.update(anysearch_enabled=False, exa_enabled=True)
+        providers = ("tavily", "anysearch", "exa", "you", "deepseek")
+        for provider in providers:
+            engines[f"{provider}_api_keys"] = [f"fixture-{provider}-1", f"fixture-{provider}-2"]
+        raw["search_backend"].update(default_engine="exa", max_results=23)
+        self.write_fixture(raw)
+
+        normalized = self.runner._apply_plugin_config(self.meta)
+        persisted = self.read_persisted_config()
+        self.assertEqual(persisted, normalized)
+        self.assertEqual(persisted["plugin"]["config_version"], "4.4.0")
+        self.assertEqual(persisted["plugin"]["version"], "4.2.2")
+        self.assertFalse(persisted["plugin"]["enabled"])
+        self.assertEqual(persisted["search_backend"], raw["search_backend"])
+        expected_engines = {
+            **engines,
+            "keenable_enabled": False,
+            "keenable_api_keys": [],
+            "keenable_published_after": "",
+        }
+        for field, value in expected_engines.items():
+            with self.subTest(field=field):
+                self.assertEqual(persisted["engines"][field], value)
+        self.assertIn("# Preserve this user comment.", self.config_path.read_text(encoding="utf-8"))
+        with patch.object(PluginRunner, "_save_plugin_config", wraps=PluginRunner._save_plugin_config) as save:
+            self.runner._apply_plugin_config(self.meta)
+        save.assert_not_called()
 
     def test_same_version_missing_fields_are_filled_in_memory_but_not_persisted(self) -> None:
         raw = self.previous_engine_config()
