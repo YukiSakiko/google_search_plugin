@@ -109,7 +109,7 @@ class ConfigUiSchemaTests(unittest.TestCase):
     def test_api_key_lists_are_in_their_provider_blocks_with_plaintext_warnings(self) -> None:
         self.assertNotIn("api_keys", self.ui["sections"])
         engines_tab = self.ui["layout"]["tabs"][1]
-        for provider in ("tavily", "anysearch", "exa", "keenable", "you", "deepseek"):
+        for provider in ("tavily", "webz", "anysearch", "exa", "keenable", "you", "deepseek"):
             with self.subTest(provider=provider):
                 section = self.ui["sections"][provider]
                 self.assertIn(provider, engines_tab["sections"])
@@ -217,7 +217,7 @@ class ConfigUiSchemaTests(unittest.TestCase):
 
     def test_new_engines_are_selectable_and_exa_type_is_in_advanced_settings(self) -> None:
         choices = self.ui["sections"]["search"]["fields"]["default_engine"]["choices"]
-        for provider, enabled_by_default in (("anysearch", True), ("exa", False), ("keenable", False)):
+        for provider, enabled_by_default in (("anysearch", True), ("exa", False), ("keenable", False), ("webz", False)):
             with self.subTest(provider=provider):
                 self.assertIn(provider, choices)
                 config = GoogleSearchPluginConfig.model_validate({"search_backend": {"default_engine": provider}})
@@ -297,7 +297,7 @@ class ConfigUiSchemaTests(unittest.TestCase):
         self.assertIn("DeepSeek", length_hint)
 
     def test_engine_card_descriptions_state_use_and_network_without_repeating_setup(self) -> None:
-        for section_id in ("google", "bing", "sogou", "duckduckgo", "tavily", "anysearch", "exa", "you", "deepseek"):
+        for section_id in ("google", "bing", "sogou", "duckduckgo", "tavily", "webz", "anysearch", "exa", "you", "deepseek"):
             with self.subTest(section=section_id):
                 description = self.ui["sections"][section_id]["description"]
                 self.assertIn("网络", description)

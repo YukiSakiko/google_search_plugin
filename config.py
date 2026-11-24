@@ -89,7 +89,18 @@ class SearchBackendSection(PluginConfigBase):
     __ui_order__ = 3
 
     default_engine: Literal[
-        "google", "bing", "sogou", "duckduckgo", "tavily", "anysearch", "exa", "keenable", "you", "you_news", "deepseek"
+        "google",
+        "bing",
+        "sogou",
+        "duckduckgo",
+        "tavily",
+        "webz",
+        "anysearch",
+        "exa",
+        "keenable",
+        "you",
+        "you_news",
+        "deepseek",
     ] = Field(
         default="bing",
         description="默认搜索引擎",
@@ -170,6 +181,33 @@ class EnginesSection(PluginConfigBase):
         ),
     )
     tavily_turbo: bool = Field(default=False, description="是否启用 Tavily Turbo 模式")
+
+    # Webz.io News Search
+    webz_enabled: bool = Field(default=False, description="是否启用 Webz.io News Search")
+    webz_api_keys: list[str] = Field(
+        default_factory=list,
+        description="Webz API token 列表，每项一把；留空时使用 WEBZ_API_TOKEN，多个密钥随机尝试",
+    )
+    webz_days: int = Field(
+        default=30,
+        ge=0,
+        le=30,
+        description="只返回最近多少天内发布的新闻，0 表示当天，最大 30",
+    )
+    webz_language: str = Field(default="", description="文章语言，例如 english；留空不限")
+    webz_country: str = Field(default="", description="来源国家的两字母代码，例如 US 或 CN；留空不限")
+    webz_sentiment: Literal["auto", "positive", "negative", "neutral"] = Field(
+        default="auto",
+        description="情感过滤：auto 不限，或 positive、negative、neutral",
+    )
+    webz_domains: list[str] = Field(
+        default_factory=list,
+        description="只搜索这些来源域名，每项一条；留空不限",
+    )
+    webz_tickers: list[str] = Field(
+        default_factory=list,
+        description="相关公司的股票代码，每项一条，例如 NVDA；留空不限",
+    )
 
     # AnySearch
     anysearch_enabled: bool = Field(default=True, description="是否启用 AnySearch 搜索")
@@ -260,10 +298,28 @@ class EnginesSection(PluginConfigBase):
                 raise ValueError("AnySearch 标签参数必须是 JSON 对象")
         return value
 
-    @field_validator("exa_include_domains", "exa_exclude_domains", "exa_additional_queries")
+    @field_validator("exa_include_domains", "exa_exclude_domains", "exa_additional_queries", "webz_domains")
     @classmethod
     def clean_search_lists(cls, values: list[str]) -> list[str]:
         return list(dict.fromkeys(value.strip() for value in values if value.strip()))
+
+    @field_validator("webz_tickers")
+    @classmethod
+    def clean_webz_tickers(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(value.strip().upper() for value in values if value.strip()))
+
+    @field_validator("webz_language")
+    @classmethod
+    def clean_webz_language(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("webz_country")
+    @classmethod
+    def clean_webz_country(cls, value: str) -> str:
+        value = value.strip().upper()
+        if value and (len(value) != 2 or not value.isascii() or not value.isalpha()):
+            raise ValueError("Webz 国家必须是两字母代码")
+        return value
 
     @field_validator("exa_user_location")
     @classmethod

@@ -13,6 +13,7 @@ from .google import GoogleEngine
 from .bing import BingEngine
 from .sogou import SogouEngine
 from .tavily import TavilyEngine
+from .webz import WebzEngine
 from .you import YouSearchEngine, YouLiveNewsEngine, YouContentsClient, YouImagesEngine
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "BingEngine",
     "SogouEngine",
     "TavilyEngine",
+    "WebzEngine",
     "YouSearchEngine",
     "YouLiveNewsEngine",
     "YouContentsClient",

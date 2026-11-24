@@ -19,6 +19,7 @@ from ..search_engines.keenable import KeenableEngine
 from ..search_engines.google import GoogleEngine
 from ..search_engines.sogou import SogouEngine
 from ..search_engines.tavily import TavilyEngine
+from ..search_engines.webz import WebzEngine
 from ..search_engines.you import (
     YouContentsClient,
     YouLiveNewsEngine,
@@ -74,6 +75,19 @@ def _build_engine_dict(
                 "include_answer": engines.tavily_include_answer,
                 "topic": engines.tavily_topic,
                 "turbo": engines.tavily_turbo,
+            }
+        )
+    elif engine_name == "webz":
+        cfg.update(
+            {
+                "enabled": engines.webz_enabled,
+                "api_keys": list(engines.webz_api_keys),
+                "days": engines.webz_days,
+                "language": engines.webz_language,
+                "country": engines.webz_country,
+                "sentiment": engines.webz_sentiment,
+                "domains": list(engines.webz_domains),
+                "tickers": list(engines.webz_tickers),
             }
         )
     elif engine_name == "anysearch":
@@ -186,6 +200,7 @@ class EngineChain:
         self.sogou = SogouEngine(_build_engine_dict("sogou", engines, common))
         self.duckduckgo = DuckDuckGoEngine(_build_engine_dict("duckduckgo", engines, common))
         self.tavily = TavilyEngine(_build_engine_dict("tavily", engines, common))
+        self.webz = WebzEngine(_build_engine_dict("webz", engines, common))
         self.anysearch = AnySearchEngine(_build_engine_dict("anysearch", engines, common))
         self.exa = ExaEngine(_build_engine_dict("exa", engines, common))
         self.keenable = KeenableEngine(_build_engine_dict("keenable", engines, common))
@@ -221,6 +236,7 @@ class EngineChain:
         all_engines: list[tuple[str, Any]] = [
             ("deepseek", self.deepseek),
             ("tavily", self.tavily),
+            ("webz", self.webz),
             ("anysearch", self.anysearch),
             ("exa", self.exa),
             ("keenable", self.keenable),
@@ -244,7 +260,7 @@ class EngineChain:
                 continue
 
             # 需 API key 的引擎,无 key 直接跳过
-            if engine_name in {"deepseek", "tavily", "exa", "you", "you_news"} and hasattr(engine, "has_api_keys"):
+            if engine_name in {"deepseek", "tavily", "webz", "exa", "you", "you_news"} and hasattr(engine, "has_api_keys"):
                 if not engine.has_api_keys():
                     logger.info("%s 未配置 API key,跳过", engine_name)
                     continue

@@ -68,13 +68,15 @@ def _configured_engines() -> EnginesSection:
         you_contents_enabled=True,
         you_images_enabled=True,
         you_api_keys=["you-first", "you-second"],
+        webz_enabled=True,
+        webz_api_keys=["webz-first", "webz-second"],
     )
 
 
 class ApiKeyConfigTests(unittest.TestCase):
     def test_models_only_expose_api_key_lists(self) -> None:
         fields = EnginesSection.model_fields
-        for provider in ("tavily", "anysearch", "exa", "you", "deepseek"):
+        for provider in ("tavily", "anysearch", "exa", "you", "deepseek", "webz"):
             with self.subTest(provider=provider):
                 self.assertIn(f"{provider}_api_keys", fields)
                 self.assertNotIn(f"{provider}_api_key", fields)
@@ -115,6 +117,7 @@ class ApiKeyConfigTests(unittest.TestCase):
             "anysearch": engines.anysearch_api_keys,
             "exa": engines.exa_api_keys,
             "deepseek": engines.deepseek_api_keys,
+            "webz": engines.webz_api_keys,
         }
         providers.update({name: engines.you_api_keys for name in ("you", "you_news", "you_contents", "you_images")})
         for engine_name, expected in providers.items():
@@ -134,6 +137,7 @@ class ApiKeyConfigTests(unittest.TestCase):
         self.assertEqual(chain.anysearch.api_keys, engines.anysearch_api_keys)
         self.assertEqual(chain.exa.api_keys, engines.exa_api_keys)
         self.assertEqual(chain.deepseek.api_keys, engines.deepseek_api_keys)
+        self.assertEqual(chain.webz.api_keys, engines.webz_api_keys)
         for client in (chain.you, chain.you_news, chain.you_contents, images.you_images):
             with self.subTest(client=type(client).__name__):
                 self.assertEqual(client.api_keys, engines.you_api_keys)

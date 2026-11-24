@@ -80,7 +80,7 @@ class DirectSearchPipelineTests(unittest.IsolatedAsyncioTestCase):
             ),
             _result("Title only", url="https://example.com/title", content="", abstract="", snippet=""),
         ]
-        for engine_name in ("anysearch", "exa", "keenable"):
+        for engine_name in ("anysearch", "exa", "keenable", "webz"):
             for fetch_content in (False, True):
                 with self.subTest(engine=engine_name, fetch_content=fetch_content):
                     pipeline, engines, fetcher, llm = _pipeline(engine_name, results, fetch_content=fetch_content)
@@ -112,7 +112,7 @@ class DirectSearchPipelineTests(unittest.IsolatedAsyncioTestCase):
         llm.generate.assert_not_awaited()
 
     async def test_direct_output_applies_per_result_content_limit_only_when_positive(self) -> None:
-        for engine_name in ("anysearch", "exa"):
+        for engine_name in ("anysearch", "exa", "webz"):
             for limit in (5, 0, -1):
                 with self.subTest(engine=engine_name, limit=limit):
                     result = _result(content="1234567890")

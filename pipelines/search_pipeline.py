@@ -78,7 +78,7 @@ class SearchPipeline:
         if not results:
             return f"关于「{question}」，我没有找到相关的网络信息。"
 
-        if last_engine in {"anysearch", "exa", "keenable"}:
+        if last_engine in {"anysearch", "exa", "keenable", "webz"}:
             logger.info("%s 直接返回 API 搜索内容,跳过网页抓取与本地 LLM 总结", last_engine)
             # Keenable 按结果条数控制篇幅，不截断服务商返回的片段。
             limit = None if last_engine == "keenable" else self._backend.max_content_length
