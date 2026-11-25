@@ -244,6 +244,7 @@ class NewEngineFallbackTests(unittest.IsolatedAsyncioTestCase):
         *,
         enabled: tuple[str, ...] = ("anysearch", "exa"),
         default: str = "anysearch",
+        order: tuple[str | dict[str, str], ...] | None = None,
         exa_keys: tuple[str, ...] = ("fake-exa-key",),
     ) -> EngineChain:
         values = {f"{name}_enabled": name in enabled for name in _ENGINE_NAMES}
@@ -254,10 +255,70 @@ class NewEngineFallbackTests(unittest.IsolatedAsyncioTestCase):
             deepseek_api_keys=["fake-deepseek-key"],
             you_api_keys=["fake-you-key"],
         )
-        chain = EngineChain(EnginesSection(**values), SearchBackendSection(default_engine=default))
+        backend: dict[str, object] = {"default_engine": default}
+        if order is not None:
+            backend["engine_order"] = list(order)
+        chain = EngineChain(EnginesSection(**values), SearchBackendSection.model_validate(backend))
         for name in _ENGINE_NAMES:
             getattr(chain, name).search = AsyncMock(return_value=[])
         return chain
+
+    @staticmethod
+    def spy_on_order(chain: EngineChain) -> Mock:
+        calls = Mock()
+        for name in _ENGINE_NAMES:
+            calls.attach_mock(getattr(chain, name).search, name)
+        return calls
+
+    async def test_vertical_editor_rows_call_only_the_displayed_engines_in_their_displayed_order(self) -> None:
+        order = ({"engine": "You 新闻"}, {"engine": "搜狗"}, {"engine": "Webz.io"})
+        chain = self.make_chain(enabled=_ENGINE_NAMES, order=order, default="exa")
+        calls = self.spy_on_order(chain)
+        chain.exa.search.return_value = [_result("Should not be called")]
+        results = [_result()]
+        chain.webz.search.return_value = results
+        self.assertEqual(await chain.search_with_fallback("query", 2), (results, "webz"))
+        self.assertEqual([call[0] for call in calls.mock_calls], ["you_news", "sogou", "webz"])
+
+    async def test_custom_order_handles_each_failure_and_stops_after_first_success(self) -> None:
+        chain = self.make_chain(
+            enabled=_ENGINE_NAMES, default="deepseek", order=("sogou", "bing", "tavily", "duckduckgo", "exa")
+        )
+        calls = self.spy_on_order(chain)
+        results = [_result()]
+        chain.deepseek.search.return_value = results
+        chain.sogou.search.side_effect = RuntimeError("provider unavailable")
+        chain.tavily.search.side_effect = TimeoutError("request expired")
+        chain.duckduckgo.search.return_value = results
+        self.assertEqual(await chain.search_with_fallback("query", 2), (results, "duckduckgo"))
+        self.assertEqual([call[0] for call in calls.mock_calls], ["sogou", "bing", "tavily", "duckduckgo"])
+        self.assertEqual(chain.last_success_engine, "duckduckgo")
+
+    async def test_custom_order_never_appends_working_unlisted_engines(self) -> None:
+        for order in ((), ("sogou", "bing")):
+            with self.subTest(order=order):
+                chain = self.make_chain(enabled=_ENGINE_NAMES, default="anysearch", order=order)
+                calls = self.spy_on_order(chain)
+                chain.anysearch.search.return_value = [_result()]
+                self.assertEqual(await chain.search_with_fallback("query", 2), ([], ""))
+                self.assertEqual([call[0] for call in calls.mock_calls], list(order))
+
+    async def test_custom_order_still_skips_unavailable_engines_and_preserves_tavily_state(self) -> None:
+        chain = self.make_chain(
+            enabled=("exa", "tavily", "keenable"), exa_keys=(), order=("exa", "google", "tavily", "keenable")
+        )
+        calls = self.spy_on_order(chain)
+        results = [_result()]
+        chain.tavily.last_answer = "Tavily answer"
+        chain.tavily.search.return_value = results
+        self.assertEqual(await chain.search_with_fallback("q", 3, tavily_topic="news"), (results, "tavily"))
+        self.assertEqual([call[0] for call in calls.mock_calls], ["tavily"])
+        chain.tavily.search.assert_awaited_once_with("q", 3, topic="news")
+        self.assertEqual(chain.last_tavily_answer, "Tavily answer")
+        chain.tavily.search.return_value = []
+        chain.keenable.search.return_value = results
+        self.assertEqual(await chain.search_with_fallback("q", 2), (results, "keenable"))
+        self.assertIsNone(chain.last_tavily_answer)
 
     async def test_new_default_engine_runs_first_and_success_stops_fallback(self) -> None:
         for default in ("anysearch", "exa", "keenable", "webz"):

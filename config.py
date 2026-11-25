@@ -5,8 +5,9 @@
 """
 
 import json
+from collections.abc import Mapping
 from datetime import datetime
-from typing import Literal
+from typing import Literal, cast, get_args
 
 from pydantic import field_validator, model_validator
 
@@ -16,7 +17,44 @@ from maibot_sdk import Field, PluginConfigBase
 # Sections
 # ---------------------------------------------------------------------------
 
-PLUGIN_VERSION = "4.2.3"
+PLUGIN_VERSION = "4.2.4"
+
+# 顺序即旧版的后备顺序；已有配置升级时只把原首选引擎移到开头。
+EngineId = Literal[
+    "deepseek",
+    "tavily",
+    "webz",
+    "anysearch",
+    "exa",
+    "keenable",
+    "you",
+    "you_news",
+    "google",
+    "bing",
+    "duckduckgo",
+    "sogou",
+]
+LEGACY_ENGINE_ORDER: tuple[EngineId, ...] = get_args(EngineId)
+# 行内下拉框直接显示保存值；这些名称同时也是配置文件中的稳定值。
+ENGINE_LABELS: dict[EngineId, str] = {
+    "deepseek": "DeepSeek",
+    "tavily": "Tavily",
+    "webz": "Webz.io",
+    "anysearch": "AnySearch",
+    "exa": "Exa",
+    "keenable": "Keenable",
+    "you": "You 搜索",
+    "you_news": "You 新闻",
+    "google": "Google",
+    "bing": "Bing",
+    "duckduckgo": "DuckDuckGo",
+    "sogou": "搜狗",
+}
+_ENGINE_IDS = {label: engine for engine, label in ENGINE_LABELS.items()}
+
+
+def legacy_engine_order(default_engine: EngineId = "bing") -> list[EngineId]:
+    return [default_engine, *(engine for engine in LEGACY_ENGINE_ORDER if engine != default_engine)]
 
 
 class PluginSection(PluginConfigBase):
@@ -28,7 +66,7 @@ class PluginSection(PluginConfigBase):
 
     name: str = Field(default="google_search", description="插件名称")
     version: str = Field(default=PLUGIN_VERSION, description="插件版本")
-    config_version: str = Field(default="4.5.0", description="配置版本(Runner 用于兼容性校验)")
+    config_version: str = Field(default="4.7.0", description="配置版本(Runner 用于兼容性校验)")
     enabled: bool = Field(default=True, description="是否启用插件")
 
     @field_validator("version")
@@ -81,6 +119,24 @@ class ActionsSection(PluginConfigBase):
     )
 
 
+class EngineOrderEntry(PluginConfigBase):
+    engine: str = Field(default="", description="搜索引擎")
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_string(cls, value: object) -> object:
+        return {"engine": value} if isinstance(value, str) else value
+
+    @field_validator("engine")
+    @classmethod
+    def normalize_engine_name(cls, value: str) -> str:
+        if not value or value in _ENGINE_IDS:
+            return value
+        if value in ENGINE_LABELS:
+            return ENGINE_LABELS[cast(EngineId, value)]
+        raise ValueError(f"不支持的搜索引擎：{value}")
+
+
 class SearchBackendSection(PluginConfigBase):
     """搜索后端通用参数"""
 
@@ -88,22 +144,11 @@ class SearchBackendSection(PluginConfigBase):
     __ui_icon__ = "globe"
     __ui_order__ = 3
 
-    default_engine: Literal[
-        "google",
-        "bing",
-        "sogou",
-        "duckduckgo",
-        "tavily",
-        "webz",
-        "anysearch",
-        "exa",
-        "keenable",
-        "you",
-        "you_news",
-        "deepseek",
-    ] = Field(
-        default="bing",
-        description="默认搜索引擎",
+    default_engine: EngineId = Field(default="bing", description="仅用于迁移旧版配置的默认搜索引擎")
+    engine_order: list[EngineOrderEntry] = Field(
+        default_factory=lambda: [EngineOrderEntry(engine=ENGINE_LABELS[engine]) for engine in legacy_engine_order()],
+        description="网页搜索引擎的尝试顺序",
+        json_schema_extra={"min_items": 0, "max_items": len(ENGINE_LABELS)},
     )
     max_results: int = Field(default=15, description="默认返回结果数量")
     timeout: int = Field(default=20, description="搜索超时时间(秒)")
@@ -127,6 +172,27 @@ class SearchBackendSection(PluginConfigBase):
         ],
         description="抓取网页时使用的 User-Agent 列表,会从中随机选择。",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_missing_engine_order(cls, value: object) -> object:
+        if isinstance(value, Mapping) and "engine_order" not in value:
+            return {**value, "engine_order": legacy_engine_order(value.get("default_engine", "bing"))}
+        return value
+
+    @field_validator("engine_order")
+    @classmethod
+    def deduplicate_engine_order(cls, value: list[EngineOrderEntry]) -> list[EngineOrderEntry]:
+        rows: dict[str, EngineOrderEntry] = {}
+        for index, row in enumerate(value, start=1):
+            if not row.engine:
+                raise ValueError(f"搜索引擎顺序第 {index} 行：请选择引擎或删除空行。")
+            rows.setdefault(row.engine, row)
+        return list(rows.values())
+
+    @property
+    def engine_ids(self) -> list[EngineId]:
+        return [_ENGINE_IDS[row.engine] for row in self.engine_order]
 
 
 class EnginesSection(PluginConfigBase):

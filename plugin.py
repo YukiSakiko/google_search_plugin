@@ -21,7 +21,7 @@ from typing import Any, ClassVar, Mapping, Optional
 from maibot_sdk import Command, ConfigWidget, ConfigWidgetState, MaiBotPlugin, Tool
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
-from .config import GoogleSearchPluginConfig
+from .config import GoogleSearchPluginConfig, legacy_engine_order
 from .config_ui import build_config_ui_schema
 from .pipelines.content_fetcher import ContentFetcher
 from .pipelines.engine_chain import EngineChain
@@ -36,6 +36,7 @@ from .translators.nbnhhsh import NbnhhshTranslator
 
 ALLOWED_TAVILY_TOPICS = frozenset({"general", "news"})
 _API_KEY_PROVIDERS = ("tavily", "you", "deepseek")
+_LEGACY_ENGINE_ORDER_MARKER = ("__legacy_engine_order__",)
 
 
 class GoogleSearchPlugin(MaiBotPlugin):
@@ -153,19 +154,31 @@ class GoogleSearchPlugin(MaiBotPlugin):
             raise ValueError(f"未知配置页操作: {action_id}")
 
     def get_default_config(self) -> dict[str, Any]:
-        """保留旧字段直到插件归一化，避免宿主升级重建时提前丢弃密钥。"""
+        """为先补齐默认值的旧宿主保留配置迁移所需的信息。"""
         # 只扩展宿主使用的实例入口；SDK 归一化仍使用干净的 build_default_config()。
         defaults = super().get_default_config()
+        # 只有宿主模板使用内部占位；归一化后才保存实际顺序。
+        defaults["search_backend"]["engine_order"] = list(_LEGACY_ENGINE_ORDER_MARKER)
         for provider in _API_KEY_PROVIDERS:
             defaults["engines"][f"{provider}_api_key"] = ""
         return defaults
 
     def normalize_plugin_config(self, config_data: Mapping[str, Any] | None) -> tuple[dict[str, Any], bool]:
-        """将旧单密钥一次性并入列表，输出始终遵循当前配置模型。"""
+        """在 SDK 合并默认值之前迁移旧顺序和单密钥配置。"""
         raw_config = dict(config_data) if config_data is not None else {}
+        source_backend = raw_config.get("search_backend")
+        if isinstance(source_backend, Mapping) and (
+            "engine_order" not in source_backend
+            or source_backend["engine_order"] == list(_LEGACY_ENGINE_ORDER_MARKER)
+        ):
+            raw_config["search_backend"] = {
+                **source_backend,
+                "engine_order": legacy_engine_order(source_backend.get("default_engine", "bing")),
+            }
         source_engines = raw_config.get("engines")
         if not isinstance(source_engines, Mapping):
-            return super().normalize_plugin_config(config_data)
+            normalized, changed = super().normalize_plugin_config(raw_config)
+            return normalized, changed or normalized != config_data
 
         engines = dict(source_engines)
         for provider in _API_KEY_PROVIDERS:
@@ -223,10 +236,10 @@ class GoogleSearchPlugin(MaiBotPlugin):
         self._build_pipelines()
         cfg = self.config
         self.ctx.logger.info(
-            "google_search_plugin v%s 已加载 (model=%s, default_engine=%s, image_search=%s, reverse_image=%s, translation=%s)",
+            "google_search_plugin v%s 已加载 (model=%s, engine_order=%s, image_search=%s, reverse_image=%s, translation=%s)",
             cfg.plugin.version,
             cfg.models.model_name,
-            cfg.search_backend.default_engine,
+            cfg.search_backend.engine_ids,
             cfg.actions.image_search_enabled,
             cfg.reverse_image.enabled,
             cfg.translation.enabled,
@@ -864,7 +877,7 @@ class GoogleSearchPlugin(MaiBotPlugin):
         lines = [
             f"google_search_plugin v{cfg.plugin.version}",
             f"模型 task: {cfg.models.model_name}  温度: {cfg.models.temperature}",
-            f"默认引擎: {cfg.search_backend.default_engine}",
+            f"搜索顺序: {' → '.join(cfg.search_backend.engine_ids) or '(空，不发起网页搜索)'}",
             f"启用引擎: {', '.join(enabled_engines) if enabled_engines else '(无)'}",
             f"图片搜索: {'已启用' if cfg.actions.image_search_enabled else '未启用'}",
             f"以图搜图: {ri_status}",

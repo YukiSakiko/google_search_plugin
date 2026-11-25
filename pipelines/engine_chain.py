@@ -230,35 +230,14 @@ class EngineChain:
             Tuple[list[SearchResult], str]: 搜索结果列表与成功命中的引擎名称;所有引擎都失败时返回 ([], "")
         """
         engines_cfg = self._engines_cfg
-        default_engine = self._backend_cfg.default_engine
 
-        # API 引擎优先,其余兜底;显式配置的默认引擎始终排在最前。
-        all_engines: list[tuple[str, Any]] = [
-            ("deepseek", self.deepseek),
-            ("tavily", self.tavily),
-            ("webz", self.webz),
-            ("anysearch", self.anysearch),
-            ("exa", self.exa),
-            ("keenable", self.keenable),
-            ("you", self.you),
-            ("you_news", self.you_news),
-            ("google", self.google),
-            ("bing", self.bing),
-            ("duckduckgo", self.duckduckgo),
-            ("sogou", self.sogou),
-        ]
-        if default_engine in {pair[0] for pair in all_engines}:
-            ordered = [pair for pair in all_engines if pair[0] == default_engine]
-            ordered.extend(pair for pair in all_engines if pair[0] != default_engine)
-        else:
-            ordered = all_engines
-
-        for engine_name, engine in ordered:
+        for engine_name in self._backend_cfg.engine_ids:
             # engines_cfg 是 Pydantic 模型,*_enabled 字段强制为 bool,直接读即可
             if not getattr(engines_cfg, f"{engine_name}_enabled", False):
                 logger.info("引擎 %s 已禁用,跳过", engine_name)
                 continue
 
+            engine = getattr(self, engine_name)
             # 需 API key 的引擎,无 key 直接跳过
             if engine_name in {"deepseek", "tavily", "webz", "exa", "you", "you_news"} and hasattr(engine, "has_api_keys"):
                 if not engine.has_api_keys():

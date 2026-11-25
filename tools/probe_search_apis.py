@@ -35,6 +35,7 @@ async def probe(provider: str, key: str, args: argparse.Namespace) -> dict:
     )
     backend = SearchBackendSection(
         default_engine=provider,
+        engine_order=[provider],
         timeout=args.timeout,
         max_results=args.num_results,
         fetch_content=True,

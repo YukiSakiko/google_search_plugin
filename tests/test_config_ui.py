@@ -43,6 +43,7 @@ class ConfigUiSchemaTests(unittest.TestCase):
             for section_name, section in self.source["sections"].items()
             for field_name in section["fields"]
         )
+        del expected["search_backend", "default_engine"]  # 旧字段只用于迁移，不再展示。
         actual = Counter((section_name, field_name) for _, section_name, field_name, _ in self.iter_fields())
         self.assertEqual(actual, expected)
         for section_id, section_name, field_name, field in self.iter_fields():
@@ -128,7 +129,7 @@ class ConfigUiSchemaTests(unittest.TestCase):
 
     def test_keenable_discloses_fallback_and_data_collection_next_to_switch(self) -> None:
         hint = self.ui["sections"]["keenable"]["fields"]["keenable_enabled"]["hint"]
-        for phrase in ("默认引擎", "发送", "无论是否填写密钥", "记录搜索内容、搜索结果和 IP 地址"):
+        for phrase in ("顺序", "发送", "无论是否填写密钥", "记录搜索内容、搜索结果和 IP 地址"):
             self.assertIn(phrase, hint)
         count_hint = self.ui["sections"]["search"]["fields"]["max_results"]["hint"]
         self.assertIn("50", count_hint)
@@ -172,6 +173,9 @@ class ConfigUiSchemaTests(unittest.TestCase):
             original = self.source["sections"][section_name]["fields"][field_name]
             with self.subTest(section=section_id, field=field_name):
                 self.assertEqual(field.keys(), original.keys())
+                if field_name == "engine_order":
+                    self.assertEqual(set(field["item_fields"]), set(original["item_fields"]))
+                    original = {**original, "item_fields": field["item_fields"]}
                 self.assertEqual(
                     {key: value for key, value in field.items() if key not in presentation_keys},
                     {key: value for key, value in original.items() if key not in presentation_keys},
@@ -185,7 +189,7 @@ class ConfigUiSchemaTests(unittest.TestCase):
         self.assertEqual(GoogleSearchPluginConfig.model_validate(saved).model_dump(), defaults.model_dump())
 
         edits = {
-            ("search", "default_engine"): "google",
+            ("search", "engine_order"): [{"engine": "Google"}, {"engine": "You 新闻"}],
             ("search", "proxy"): "http://127.0.0.1:7890",
             ("google", "google_enabled"): True,
             ("tavily", "tavily_api_keys"): ["fake-tavily-key"],
@@ -225,12 +229,12 @@ class ConfigUiSchemaTests(unittest.TestCase):
         self.assertNotIn("api_keys", validated)
 
     def test_new_engines_are_selectable_and_exa_type_is_in_advanced_settings(self) -> None:
-        choices = self.ui["sections"]["search"]["fields"]["default_engine"]["choices"]
+        choices = self.ui["sections"]["search"]["fields"]["engine_order"]["item_fields"]["engine"]["choices"]
         for provider, enabled_by_default in (("anysearch", True), ("exa", False), ("keenable", False), ("webz", False)):
             with self.subTest(provider=provider):
-                self.assertIn(provider, choices)
-                config = GoogleSearchPluginConfig.model_validate({"search_backend": {"default_engine": provider}})
-                self.assertEqual(config.search_backend.default_engine, provider)
+                config = GoogleSearchPluginConfig.model_validate({"search_backend": {"engine_order": [provider]}})
+                self.assertIn(config.search_backend.engine_order[0].engine, choices)
+                self.assertEqual(config.search_backend.engine_ids, [provider])
                 self.assertEqual(getattr(config.engines, f"{provider}_enabled"), enabled_by_default)
         section = self.ui["sections"]["exa_advanced"]
         self.assertTrue(section["collapsed"])
@@ -240,6 +244,36 @@ class ConfigUiSchemaTests(unittest.TestCase):
         self.assertEqual(set(field["choices"]), {"auto", "lite", "deep-lite", "deep"})
         self.assertIn("留空", self.ui["sections"]["anysearch"]["fields"]["anysearch_api_keys"]["hint"])
         self.assertIn("匿名", self.ui["sections"]["anysearch"]["fields"]["anysearch_api_keys"]["hint"])
+
+    def test_engine_order_renders_as_vertical_rows_with_brand_dropdowns(self) -> None:
+        fields = self.ui["sections"]["search"]["fields"]
+        self.assertNotIn("default_engine", fields)
+        order = fields["engine_order"]
+        self.assertEqual((order["ui_type"], order["item_type"]), ("list", "object"))
+        self.assertEqual((order["min_items"], order["max_items"]), (0, 12))
+        self.assertFalse(order.get("multiple"))
+        self.assertEqual(order["default"][0], {"engine": "Bing"})
+        select = order["item_fields"]["engine"]
+        self.assertEqual((select["type"], select["default"], select["placeholder"]), ("select", "", "请选择引擎"))
+        self.assertNotIn("", select["choices"])
+        self.assertCountEqual(select["choices"], [row["engine"] for row in order["default"]])
+        self.assertEqual(len(set(select["choices"])), 12)
+        self.assertTrue({"You 搜索", "You 新闻", "Webz.io", "搜狗"} <= set(select["choices"]))
+        self.assertIn("从上到下", order["hint"])
+
+    def test_explicit_order_keeps_first_occurrence_and_never_adds_engines(self) -> None:
+        for given, expected in (([], []), (["exa", {"engine": "Bing"}, {"engine": "exa"}], ["exa", "bing"])):
+            config = GoogleSearchPluginConfig.model_validate(
+                {"search_backend": {"default_engine": "tavily", "engine_order": given}}
+            )
+            self.assertEqual(config.search_backend.engine_ids, expected)
+        with self.assertRaises(ValueError):
+            GoogleSearchPluginConfig.model_validate({"search_backend": {"engine_order": ["unknown"]}})
+        for row in ({}, {"engine": ""}):
+            with self.subTest(row=row), self.assertRaisesRegex(ValueError, "请选择引擎"):
+                GoogleSearchPluginConfig.model_validate({"search_backend": {"engine_order": [row]}})
+        previous = GoogleSearchPluginConfig.model_validate({"search_backend": {"default_engine": "exa"}})
+        self.assertEqual(previous.search_backend.engine_ids[0], "exa")
 
     def test_new_provider_options_are_grouped_in_collapsed_advanced_blocks(self) -> None:
         expected_fields = {

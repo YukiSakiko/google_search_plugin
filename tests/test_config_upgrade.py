@@ -19,6 +19,7 @@ _HOST_ROOT = Path(__file__).resolve().parents[3]
 if str(_HOST_ROOT) not in sys.path:
     sys.path.insert(0, str(_HOST_ROOT))
 
+from plugins.google_search_plugin.config import ENGINE_LABELS  # noqa: E402
 from plugins.google_search_plugin.plugin import GoogleSearchPlugin  # noqa: E402
 
 # Import the real Runner without initializing the host's global file logging.
@@ -27,7 +28,7 @@ _HOST_LOGGER.get_logger = Mock(return_value=Mock(name="config_test_host_logger")
 _HOST_LOGGER.get_console_handler = Mock()
 _HOST_LOGGER.initialize_logging = Mock()
 with patch.dict(sys.modules, {"src.common.logger": _HOST_LOGGER}):
-    from src.plugin_runtime.runner.runner_main import PluginRunner
+    from src.plugin_runtime.runner.runner_main import PluginRunner, rebuild_plugin_config_data
 
 _NEW_ENGINE_DEFAULTS = {
     "anysearch_enabled": True,
@@ -65,6 +66,7 @@ class RunnerConfigUpgradeTests(unittest.TestCase):
 
     def previous_engine_config(self) -> dict:
         config = self.plugin.build_default_config()
+        config["search_backend"].pop("engine_order", None)
         for name in tuple(config["engines"]):
             if name.startswith(("anysearch_", "exa_")):
                 config["engines"].pop(name)
@@ -150,6 +152,45 @@ class RunnerConfigUpgradeTests(unittest.TestCase):
     def test_440_upgrade_writes_webz_defaults_and_keeps_existing_settings(self) -> None:
         self.assert_engine_upgrade("4.2.2", "4.4.0", "keenable", _WEBZ_DEFAULTS)
 
+    def test_450_upgrade_preserves_the_previous_search_order(self) -> None:
+        self.assert_engine_upgrade("4.2.3", "4.5.0", "webz", {})
+
+    def test_460_upgrade_converts_string_list_to_rows_and_preserves_an_empty_order(self) -> None:
+        for previous, expected in (
+            (["webz", "sogou", "you_news"], [{"engine": "Webz.io"}, {"engine": "搜狗"}, {"engine": "You 新闻"}]),
+            ([], []),
+        ):
+            with self.subTest(previous=previous):
+                raw = self.plugin.build_default_config()
+                raw["plugin"]["config_version"] = "4.6.0"
+                raw["search_backend"].update(default_engine="exa", engine_order=previous, max_results=23)
+                self.write_fixture(raw)
+                normalized = self.runner._apply_plugin_config(self.meta)
+                self.assertEqual(self.read_persisted_config(), normalized)
+                self.assertEqual(normalized["plugin"]["config_version"], "4.7.0")
+                self.assertEqual(normalized["search_backend"], {**raw["search_backend"], "engine_order": expected})
+                self.assertEqual(self.plugin.config.search_backend.engine_ids, previous)
+                self.assertIn("# Preserve this user comment.", self.config_path.read_text(encoding="utf-8"))
+
+    def test_old_runner_rebuild_preserves_missing_and_explicit_orders(self) -> None:
+        defaults = self.plugin.build_default_config()
+        bing_first = "bing deepseek tavily webz anysearch exa keenable you you_news google duckduckgo sogou".split()
+        exa_first = "exa deepseek tavily webz anysearch keenable you you_news google bing duckduckgo sogou".split()
+        cases = ((None, exa_first), (bing_first, bing_first), (["bing", "sogou"], ["bing", "sogou"]), ([], []))
+        for order, expected in cases:
+            with self.subTest(order=order):
+                raw = deepcopy(defaults)
+                raw["plugin"]["config_version"] = "4.5.0"
+                raw["search_backend"]["default_engine"] = "exa"
+                if order is None:
+                    del raw["search_backend"]["engine_order"]
+                else:
+                    raw["search_backend"]["engine_order"] = order
+                rebuilt = rebuild_plugin_config_data(self.plugin.get_default_config(), raw)
+                normalized, _ = self.plugin.normalize_plugin_config(rebuilt)
+                expected_rows = [{"engine": ENGINE_LABELS[engine]} for engine in expected]
+                self.assertEqual(normalized["search_backend"]["engine_order"], expected_rows)
+
     def assert_engine_upgrade(
         self, old_version: str, old_config_version: str, default_engine: str, new_fields: dict
     ) -> None:
@@ -160,12 +201,15 @@ class RunnerConfigUpgradeTests(unittest.TestCase):
         for field in new_fields:
             del engines[field]
         engines.update(anysearch_enabled=False, exa_enabled=True)
+        engines[f"{default_engine}_enabled"] = True
         if "keenable_enabled" in engines:
             engines.update(keenable_enabled=True, keenable_published_after="7d")
         for field in engines:
             if field.endswith("_api_keys"):
                 engines[field] = [f"fixture-{field}-1", f"fixture-{field}-2"]
         raw["search_backend"].update(default_engine=default_engine, max_results=23)
+        raw["search_backend"].pop("engine_order", None)
+        raw["models"]["temperature"] = 0.2
         self.write_fixture(raw)
 
         normalized = self.runner._apply_plugin_config(self.meta)
@@ -174,7 +218,13 @@ class RunnerConfigUpgradeTests(unittest.TestCase):
         self.assertEqual(persisted["plugin"]["config_version"], current_metadata["config_version"])
         self.assertEqual(persisted["plugin"]["version"], current_metadata["version"])
         self.assertFalse(persisted["plugin"]["enabled"])
-        self.assertEqual(persisted["search_backend"], raw["search_backend"])
+        old_order = "deepseek tavily webz anysearch exa keenable you you_news google bing duckduckgo sogou".split()
+        expected_ids = [default_engine, *(engine for engine in old_order if engine != default_engine)]
+        expected_order = [{"engine": ENGINE_LABELS[engine]} for engine in expected_ids]
+        self.assertEqual(persisted["search_backend"], {**raw["search_backend"], "engine_order": expected_order})
+        for section in raw.keys() - {"plugin", "search_backend", "engines"}:
+            with self.subTest(section=section):
+                self.assertEqual(persisted[section], raw[section])
         expected_engines = {**engines, **new_fields}
         for field, value in expected_engines.items():
             with self.subTest(field=field):

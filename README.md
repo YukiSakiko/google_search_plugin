@@ -23,9 +23,9 @@ uv pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 
 1. 在“搜索引擎”页启用需要的引擎。
 2. 需要密钥的引擎每项填一把，多把密钥会随机轮换。AnySearch 和 Keenable 可留空。
-3. 在“常用设置”选择默认引擎；使用 Google 等需要代理的网络环境时，按需填写代理地址。
+3. 在“常用设置 → 搜索引擎顺序”逐行选择引擎，拖动左侧手柄调整上下顺序；越靠上越优先，失败或无结果时尝试下一行。需要代理时，按需填写代理地址。
 
-选择默认引擎不会自动启用它，需先完成第 1 步。
+列表中的引擎仍需启用；未列出的不会尝试，清空列表则停止网页搜索。旧配置会自动保留原来的首选和后备顺序。
 总结直接复用麦麦的模型任务，通常无需额外配置模型接口。
 
 密钥申请：[Tavily](https://app.tavily.com)、[Webz.io](https://webz.io)、[You](https://you.com/platform)、[AnySearch](https://anysearch.com)、[Exa](https://exa.ai)、[Keenable](https://app.keenable.ai)。
@@ -40,7 +40,7 @@ Keenable 默认关闭。启用后直接返回完整片段，条数可在「常�
 
 | WebUI 标签页 | 用途 |
 | --- | --- |
-| 常用设置 | 默认引擎、结果数量、代理、总结模型和功能开关 |
+| 常用设置 | 引擎顺序、结果数量、代理、总结模型和功能开关 |
 | 搜索引擎 | 各引擎的开关、API 密钥列表和基本参数 |
 | 高级设置 | 超时、正文抓取和引擎高级参数，默认折叠 |
 
@@ -79,7 +79,7 @@ uv run --no-sync python plugins/google_search_plugin/tools/probe_reverse_image.p
 
 ## 查看运行状态
 
-在群聊或私聊发送 `/google_search_status`，可查看当前默认引擎、启用引擎、模型任务和功能开关，排查配置是否生效。
+在群聊或私聊发送 `/google_search_status`，可查看当前搜索顺序、启用引擎、模型任务和功能开关，排查配置是否生效。
 
 ## 鸣谢
 

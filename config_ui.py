@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from typing import Any
 
+from .config import ENGINE_LABELS
+
 
 @dataclass(frozen=True)
 class _Section:
@@ -16,9 +18,9 @@ _SECTIONS = {
     "search": _Section(
         "search_backend",
         "搜索设置",
-        "通常只需选择默认引擎；其他参数可以保持默认。",
+        "每行选一个搜索引擎，排在最上面的优先使用。",
         {
-            "default_engine": "默认搜索引擎",
+            "engine_order": "搜索引擎顺序",
             "max_results": "搜索结果数量",
             "fetch_content": "额外抓取网页正文",
             "proxy": "代理地址",
@@ -33,7 +35,7 @@ _SECTIONS = {
     "images": _Section(
         "actions",
         "图片搜索",
-        "按需开启；通过新版 Tool 返回候选图片由麦麦决定是否发送，不受默认网页搜索引擎影响。",
+        "按需开启；候选图片由麦麦决定是否发送，不受网页搜索顺序影响。",
         {"image_search_enabled": "启用图片搜索"},
     ),
     "reverse_image": _Section(
@@ -315,7 +317,10 @@ _TABS = {
 }
 
 _HINTS = {
-    "search_backend.default_engine": "优先使用的网页搜索引擎，需在搜索引擎页同时启用；失败或无结果时自动切换其他已启用引擎。",
+    "search_backend.engine_order": (
+        "从上到下依次尝试，拖动每行左侧的手柄可调整顺序。请求失败或没有结果时尝试下一个，找到结果就停止。"
+        "只用列表中已启用且满足密钥要求的引擎；移除后不再尝试，清空后不进行网页搜索。"
+    ),
     "search_backend.max_results": (
         "每次网页搜索期望返回的条数。Keenable 最多返回 50 条，Webz.io 最多返回 100 条，实际结果可能更少。"
         "这两个引擎都会保留完整片段；想减少返回内容，可调低条数。"
@@ -328,7 +333,7 @@ _HINTS = {
     "models.temperature": "本地搜索总结的生成温度；不影响 DeepSeek 服务端直接生成的答案。",
     "models.llm_timeout_seconds": "单次本地 LLM 总结调用的超时秒数，并非整个搜索流程的总超时。",
     "engines.keenable_enabled": (
-        "启用后，即使没有设为默认引擎，其他引擎未找到结果或请求失败时，也可能将搜索内容发送给 Keenable。"
+        "启用并加入搜索顺序后，轮到 Keenable 时就会向它发送搜索内容。"
         "无论是否填写密钥，服务商默认都会记录搜索内容、搜索结果和 IP 地址。"
     ),
     "engines.you_contents_force": "允许对其他引擎的结果使用 You Contents；仍需开启网页正文抓取和 You Contents，并提供有效密钥。",
@@ -385,6 +390,15 @@ def build_config_ui_schema(schema: dict[str, Any]) -> dict[str, Any]:
                     hint=_HINTS.get(path, field["description"]),
                     order=order,
                 )
+                if path == "search_backend.engine_order":
+                    field["item_fields"] = {
+                        "engine": {
+                            **field["item_fields"]["engine"],
+                            "type": "select",
+                            "choices": list(ENGINE_LABELS.values()),
+                            "placeholder": "请选择引擎",
+                        }
+                    }
                 if path in {"search_backend.zhihu_cookies", "reverse_image.google_lens_cookies"}:
                     field["ui_type"] = "password"
                 if spec.source == "engines" and field_name.endswith("_api_keys"):
