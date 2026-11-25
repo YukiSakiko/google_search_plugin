@@ -2,7 +2,7 @@
 
 为麦麦提供网页搜索与答案总结，另支持图片搜索和网络缩写翻译。
 
-支持 Google、Bing、搜狗、DuckDuckGo / DDGS、Tavily、AnySearch、Exa、Keenable、You 和 DeepSeek；搜索失败时自动尝试其他已启用的引擎。
+支持 Google、Bing、搜狗、DuckDuckGo / DDGS、Tavily、Webz.io News Search、AnySearch、Exa、Keenable、You 和 DeepSeek；搜索失败时自动尝试其他已启用的引擎。
 
 ## 安装依赖
 
@@ -28,7 +28,9 @@ uv pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 选择默认引擎不会自动启用它，需先完成第 1 步。
 总结直接复用麦麦的模型任务，通常无需额外配置模型接口。
 
-密钥申请：[Tavily](https://app.tavily.com)、[You](https://you.com/platform)、[AnySearch](https://anysearch.com)、[Exa](https://exa.ai)、[Keenable](https://app.keenable.ai)。
+密钥申请：[Tavily](https://app.tavily.com)、[Webz.io](https://webz.io)、[You](https://you.com/platform)、[AnySearch](https://anysearch.com)、[Exa](https://exa.ai)、[Keenable](https://app.keenable.ai)。
+
+Webz.io 新闻搜索默认关闭，提供近 30 天的新闻摘录和发布日期，条数可在「常用设置」调整。密钥填在搜索引擎页；留空时使用 `WEBZ_API_TOKEN`。
 
 Keenable 默认关闭。启用后直接返回完整片段，条数可在「常用设置」调整。无论是否填写密钥，服务商[默认记录搜索词、结果和 IP 地址](https://docs.keenable.ai/data-privacy)。
 
@@ -83,7 +85,7 @@ uv run --no-sync python plugins/google_search_plugin/tools/probe_reverse_image.p
 
 [MaiBot](https://github.com/MaiM-with-u/MaiBot)
 
-感谢 [heitiehu-beep](https://github.com/heitiehu-beep)、[wanshangovo](https://github.com/wanshangovo)、[KGKallasmaa](https://github.com/KGKallasmaa) 对插件的贡献。
+感谢 [heitiehu-beep](https://github.com/heitiehu-beep)、[wanshangovo](https://github.com/wanshangovo)、[KGKallasmaa](https://github.com/KGKallasmaa)、[webz-Integrations](https://github.com/webz-Integrations) 对插件的贡献。
 
 ## Star History
 

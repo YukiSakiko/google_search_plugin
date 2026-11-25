@@ -28,6 +28,8 @@ def _format_direct_results(results: list[SearchResult], max_content_length: int 
     sections: list[str] = []
     for index, result in enumerate(results, start=1):
         header = f"{index}. [{result.title}]({result.url})"
+        if result.published_at:
+            header += f"\n发布时间：{result.published_at}"
         content = (result.content or result.abstract or result.snippet).strip()
         if max_content_length is not None and max_content_length > 0 and len(content) > max_content_length:
             content = content[:max_content_length] + "..."
@@ -78,10 +80,10 @@ class SearchPipeline:
         if not results:
             return f"关于「{question}」，我没有找到相关的网络信息。"
 
-        if last_engine in {"anysearch", "exa", "keenable"}:
+        if last_engine in {"anysearch", "exa", "keenable", "webz"}:
             logger.info("%s 直接返回 API 搜索内容,跳过网页抓取与本地 LLM 总结", last_engine)
-            # Keenable 按结果条数控制篇幅，不截断服务商返回的片段。
-            limit = None if last_engine == "keenable" else self._backend.max_content_length
+            # Keenable 和 Webz 按结果条数控制篇幅，不截断服务商返回的片段。
+            limit = None if last_engine in {"keenable", "webz"} else self._backend.max_content_length
             return _format_direct_results(results, limit)
 
         # ---- 2. 内容补充与智能直出 (针对自带优质总结的 AI 引擎) ---- #

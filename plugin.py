@@ -818,6 +818,8 @@ class GoogleSearchPlugin(MaiBotPlugin):
             enabled_engines.append("duckduckgo")
         if e.tavily_enabled:
             enabled_engines.append("tavily")
+        if e.webz_enabled:
+            enabled_engines.append("webz")
         if e.anysearch_enabled:
             enabled_engines.append("anysearch")
         if e.exa_enabled:

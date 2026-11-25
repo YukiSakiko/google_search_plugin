@@ -79,6 +79,12 @@ _SECTIONS = {
         "面向 AI 应用提供检索资料与答案；需可访问 Tavily API 的网络环境。",
         {"tavily_enabled": "启用 Tavily", "tavily_api_keys": "API 密钥列表"},
     ),
+    "webz": _Section(
+        "engines",
+        "Webz.io News Search",
+        "检索近 30 天的全球新闻；需可访问 Webz.io API 的网络环境。",
+        {"webz_enabled": "启用 Webz.io News Search", "webz_api_keys": "API 密钥列表"},
+    ),
     "anysearch": _Section(
         "engines",
         "AnySearch",
@@ -148,6 +154,19 @@ _SECTIONS = {
             "tavily_include_raw_content": "返回网页原始内容",
             "tavily_topic": "搜索主题",
             "tavily_turbo": "启用 Turbo 模式",
+        },
+    ),
+    "webz_advanced": _Section(
+        "engines",
+        "Webz.io News Search 参数",
+        "按需限制发布时间、语言、国家、情感、来源域名和股票代码。",
+        {
+            "webz_days": "最近天数",
+            "webz_language": "文章语言",
+            "webz_country": "来源国家",
+            "webz_sentiment": "情感",
+            "webz_domains": "来源域名",
+            "webz_tickers": "股票代码",
         },
     ),
     "anysearch_advanced": _Section(
@@ -271,7 +290,7 @@ _TABS = {
     "basic": ("常用设置", ("search", "model", "images", "reverse_image", "translation", "plugin")),
     "engines": (
         "搜索引擎",
-        ("google", "bing", "sogou", "duckduckgo", "tavily", "anysearch", "exa", "keenable", "you", "deepseek"),
+        ("google", "bing", "sogou", "duckduckgo", "tavily", "webz", "anysearch", "exa", "keenable", "you", "deepseek"),
     ),
     "advanced": (
         "高级设置",
@@ -285,6 +304,7 @@ _TABS = {
             "exa_advanced",
             "exa_content",
             "keenable_advanced",
+            "webz_advanced",
             "you_advanced",
             "you_extensions",
             "deepseek_advanced",
@@ -297,8 +317,8 @@ _TABS = {
 _HINTS = {
     "search_backend.default_engine": "优先使用的网页搜索引擎，需在搜索引擎页同时启用；失败或无结果时自动切换其他已启用引擎。",
     "search_backend.max_results": (
-        "每次网页搜索期望返回的条数。Keenable 单次最多提供 50 条，实际结果可能更少。"
-        "插件会保留 Keenable 返回的完整片段；想减少返回内容，可调低条数。"
+        "每次网页搜索期望返回的条数。Keenable 最多返回 50 条，Webz.io 最多返回 100 条，实际结果可能更少。"
+        "这两个引擎都会保留完整片段；想减少返回内容，可调低条数。"
     ),
     "search_backend.fetch_content": "搜索后额外抓取网页正文。关闭可减少请求和延迟，不影响引擎自带的内容或答案。",
     "search_backend.proxy": "搜索请求和普通网页抓取使用的显式 HTTP/HTTPS 代理；留空不指定代理，部分请求仍可能使用环境代理。并非所有引擎或图片下载都使用此设置。",
@@ -327,6 +347,11 @@ _HINTS = {
     "engines.exa_text_max_characters": "每条结果的网页正文字符上限；0 使用服务端默认值。",
     "engines.exa_max_age_hours": "-2 由服务端自动决定，-1 仅使用缓存，0 请求最新内容，1-720 为允许的缓存小时数；lite 只能使用 -2。",
     "engines.exa_livecrawl_timeout_ms": "服务端实时抓取超时，单位为毫秒；0 使用默认值，1-90000 指定超时；lite 只能使用 0。",
+    "engines.webz_days": "0 表示只看当天，30 表示最近 30 天；按发布日期过滤。",
+    "engines.webz_country": "来源国家的两字母代码，例如 US；留空不限。",
+    "engines.webz_sentiment": "auto 不限情感，也可以选择 positive、negative 或 neutral。",
+    "engines.webz_domains": "只保留这些来源域名，每项一条；留空不限。",
+    "engines.webz_tickers": "相关公司的股票代码，每项一条，例如 NVDA；留空不限。",
     "reverse_image.enabled": "开启后向麦麦暴露 reverse_image_search 工具，用于识别群聊或私聊图片出处、角色与梗图。",
     "reverse_image.google_lens_enabled": "优先使用 Google Lens（准确率最高）；需要可访问 Google 的代理及本机浏览器/Playwright，遇风控会自动降级。",
     "reverse_image.google_lens_cookies": "适合无桌面环境的 Docker/Linux 服务器部署：粘贴 google.com 登录态 Cookie 字符串；留空则使用本地持久化浏览器目录。",
@@ -372,6 +397,8 @@ def build_config_ui_schema(schema: dict[str, Any]) -> dict[str, Any]:
                         field["hint"] = "留空可使用 AnySearch 匿名搜索，额度由服务端限制。" + field["hint"]
                     if field_name == "keenable_api_keys":
                         field["hint"] = "留空可使用 Keenable 匿名接口，按 IP 限流。" + field["hint"]
+                    if field_name == "webz_api_keys":
+                        field["hint"] = "留空时使用 WEBZ_API_TOKEN。" + field["hint"]
                 if section_id == "plugin_info":
                     field["disabled"] = True
                 fields[field_name] = field

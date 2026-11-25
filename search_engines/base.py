@@ -85,6 +85,7 @@ class SearchResult:
     abstract: str = ""
     rank: int = 0
     content: str = ""
+    published_at: str = ""
 
 class BaseSearchEngine:
     """搜索引擎基类"""
