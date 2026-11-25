@@ -317,13 +317,13 @@ _TABS = {
 _HINTS = {
     "search_backend.default_engine": "优先使用的网页搜索引擎，需在搜索引擎页同时启用；失败或无结果时自动切换其他已启用引擎。",
     "search_backend.max_results": (
-        "每次网页搜索期望返回的条数。Keenable 单次最多提供 50 条，实际结果可能更少。"
-        "插件会保留 Keenable 返回的完整片段；想减少返回内容，可调低条数。"
+        "每次网页搜索期望返回的条数。Keenable 最多返回 50 条，Webz.io 最多返回 100 条，实际结果可能更少。"
+        "这两个引擎都会保留完整片段；想减少返回内容，可调低条数。"
     ),
     "search_backend.fetch_content": "搜索后额外抓取网页正文。关闭可减少请求和延迟，不影响引擎自带的内容或答案。",
     "search_backend.proxy": "搜索请求和普通网页抓取使用的显式 HTTP/HTTPS 代理；留空不指定代理，部分请求仍可能使用环境代理。并非所有引擎或图片下载都使用此设置。",
     "search_backend.timeout": "单个搜索请求的超时秒数；多密钥尝试或引擎降级时耗时可能累加，并非整个搜索流程的总超时。",
-    "search_backend.max_content_length": "单页抓取正文及 AnySearch/Exa/Webz 直返片段的最大字符数，不是总长度或 Token 数；不限制其他引擎内联内容或 DeepSeek 直接生成的答案。",
+    "search_backend.max_content_length": "单页抓取正文及 AnySearch/Exa 直返片段的最大字符数，不是总长度或 Token 数；不限制其他引擎内联内容或 DeepSeek 直接生成的答案。",
     "models.model_name": "搜索结果总结使用的宿主模型任务，通常保持 replyer；具体模型由麦麦对应任务的配置决定。",
     "models.temperature": "本地搜索总结的生成温度；不影响 DeepSeek 服务端直接生成的答案。",
     "models.llm_timeout_seconds": "单次本地 LLM 总结调用的超时秒数，并非整个搜索流程的总超时。",
@@ -348,7 +348,6 @@ _HINTS = {
     "engines.exa_max_age_hours": "-2 由服务端自动决定，-1 仅使用缓存，0 请求最新内容，1-720 为允许的缓存小时数；lite 只能使用 -2。",
     "engines.exa_livecrawl_timeout_ms": "服务端实时抓取超时，单位为毫秒；0 使用默认值，1-90000 指定超时；lite 只能使用 0。",
     "engines.webz_days": "0 表示只看当天，30 表示最近 30 天；按发布日期过滤。",
-    "engines.webz_language": "文章语言，例如 english；留空不限。",
     "engines.webz_country": "来源国家的两字母代码，例如 US；留空不限。",
     "engines.webz_sentiment": "auto 不限情感，也可以选择 positive、negative 或 neutral。",
     "engines.webz_domains": "只保留这些来源域名，每项一条；留空不限。",

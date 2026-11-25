@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import datetime, timezone
@@ -196,6 +197,121 @@ class WebzEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0].content, "from chunk")
         self.assertEqual(results[1].content, "from summary")
         self.assertEqual([item.rank for item in results], [0, 1])
+
+    async def test_request_and_service_errors_never_try_another_token(self) -> None:
+        body = {"results": [article()]}
+        cases = {
+            "redirect with data": response_context(body, 307),
+            "bad query": response_context(body, 400),
+            "invalid filters": response_context(body, 422),
+            "service unavailable": response_context(body, 503),
+            "invalid JSON": response_context(raw="invalid"),
+            "empty response": response_context(raw=""),
+            "connection failure": OSError("disconnected"),
+        }
+        engine = WebzEngine({"api_keys": ["fixture-a", "fixture-b", "fixture-c"]})
+        for reason, failure in cases.items():
+            with self.subTest(reason=reason):
+                context, session = session_context(failure, response_context(body))
+                with patch("aiohttp.ClientSession", return_value=context):
+                    self.assertEqual(await engine.search("query", 2), [])
+                session.post.assert_called_once()
+
+    async def test_key_scoped_statuses_try_each_configured_token_once_without_using_env(self) -> None:
+        engine = WebzEngine({"api_keys": ["fixture-a", "fixture-a", "fixture-b"]})
+        for status in (401, 402, 403, 429):
+            with self.subTest(status=status):
+                ctx, session = session_context(
+                    response_context(status=status),
+                    response_context(status=status),
+                    response_context({"results": [article()]}),
+                )
+                with patch.dict(os.environ, {"WEBZ_API_TOKEN": _ENV_TOKEN}), patch(
+                    "aiohttp.ClientSession", return_value=ctx
+                ):
+                    self.assertEqual(await engine.search("query", 1), [])
+                headers = [call.kwargs["headers"]["Authorization"] for call in session.post.call_args_list]
+                self.assertCountEqual(headers, ["Bearer fixture-a", "Bearer fixture-b"])
+
+    async def test_timeout_budget_survives_key_rotation(self) -> None:
+        # Spend 6 of 10 seconds on the first key; a 5-second second request is too late.
+        loop = asyncio.get_running_loop()
+        clock = loop.time
+        elapsed = 0
+        first = response_context(status=401)
+        unauthorized = first.__aenter__.return_value
+
+        async def first_response():
+            nonlocal elapsed
+            elapsed += 6
+            await asyncio.sleep(0)
+            return unauthorized
+
+        async def second_body() -> str:
+            nonlocal elapsed
+            elapsed += 5
+            await asyncio.sleep(0.01)
+            return json.dumps({"results": [article()]})
+
+        first.__aenter__.side_effect = first_response
+        second = response_context()
+        second.__aenter__.return_value.text.side_effect = second_body
+        context, session = session_context(first, second, response_context({"results": [article()]}))
+        engine = WebzEngine({"api_keys": ["fixture-a", "fixture-b", "fixture-c"], "timeout": 10})
+        with (
+            patch.object(loop, "slow_callback_duration", 60),
+            patch.object(loop, "time", side_effect=lambda: clock() + elapsed),
+            patch("aiohttp.ClientSession", return_value=context),
+        ):
+            self.assertEqual(await engine.search("query", 1), [])
+        self.assertEqual(session.post.call_count, 2)
+
+    async def test_nonpositive_timeouts_do_not_set_a_session_or_search_deadline(self) -> None:
+        async def read_body() -> str:
+            await asyncio.sleep(0)
+            return json.dumps({"results": [article()]})
+
+        for timeout in (0, -1):
+            with self.subTest(timeout=timeout):
+                response = response_context()
+                response.__aenter__.return_value.text.side_effect = read_body
+                context, _ = session_context(response)
+                with patch("aiohttp.ClientSession", return_value=context) as factory:
+                    results = await WebzEngine({"api_keys": [_TOKEN], "timeout": timeout}).search("query", 2)
+                self.assertEqual([r.title for r in results], ["Headline"])
+                self.assertIsNone(factory.call_args.kwargs["timeout"].total)
+
+    async def test_external_cancellation_is_not_treated_as_a_failed_key(self) -> None:
+        started = asyncio.Event()
+
+        async def blocked_body():
+            started.set()
+            await asyncio.Future()
+
+        response = response_context()
+        response.__aenter__.return_value.text.side_effect = blocked_body
+        context, session = session_context(response, response_context({"results": [article()]}))
+        engine = WebzEngine({"api_keys": ["fixture-a", "fixture-b"]})
+        with patch("aiohttp.ClientSession", return_value=context):
+            task = asyncio.create_task(engine.search("query", 1))
+            await asyncio.wait_for(started.wait(), timeout=1)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        session.post.assert_called_once()
+
+    async def test_only_provided_dates_are_kept_and_long_chunks_are_preserved(self) -> None:
+        chunk = "A" * 5200 + "\n\n    tail"
+        rows = [article(url=f"https://example.com/{i}", text=chunk) for i in range(4)]
+        rows[0]["article"]["published_at"] = " 2026-11-20T07:15:00+08:00 "
+        rows[1]["article"].pop("published_at")
+        rows[2]["article"]["published_at"] = 12345
+        rows[3]["article"]["published_at"] = None
+        context, _ = session_context(response_context({"results": rows}))
+        with patch("aiohttp.ClientSession", return_value=context):
+            results = await WebzEngine({"api_keys": [_TOKEN]}).search("query", 4)
+        self.assertEqual([item.published_at for item in results], ["2026-11-20T07:15:00+08:00", "", "", ""])
+        self.assertEqual([(item.snippet, item.abstract, item.content) for item in results], [(chunk, chunk, chunk)] * 4)
 
     async def test_k_is_capped_at_100(self) -> None:
         context, session = session_context(response_context({"results": []}))

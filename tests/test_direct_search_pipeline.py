@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import json
 import sys
 import unittest
 
@@ -21,6 +22,7 @@ from plugins.google_search_plugin.search_engines.base import SearchResult  # noq
 _ENGINE_NAMES = (
     "deepseek",
     "tavily",
+    "webz",
     "anysearch",
     "exa",
     "keenable",
@@ -112,7 +114,7 @@ class DirectSearchPipelineTests(unittest.IsolatedAsyncioTestCase):
         llm.generate.assert_not_awaited()
 
     async def test_direct_output_applies_per_result_content_limit_only_when_positive(self) -> None:
-        for engine_name in ("anysearch", "exa", "webz"):
+        for engine_name in ("anysearch", "exa"):
             for limit in (5, 0, -1):
                 with self.subTest(engine=engine_name, limit=limit):
                     result = _result(content="1234567890")
@@ -129,14 +131,61 @@ class DirectSearchPipelineTests(unittest.IsolatedAsyncioTestCase):
                     fetcher.fetch_batch.assert_not_awaited()
                     llm.generate.assert_not_awaited()
 
-    async def test_keenable_returns_the_whole_snippet_even_with_a_short_page_limit(self) -> None:
+    async def test_keenable_and_webz_return_whole_snippets_even_with_a_short_page_limit(self) -> None:
         snippet = "first paragraph\n\n" + "long text " * 600 + "answer at the end"
         result = _result(content="", abstract=snippet, snippet=snippet)
-        pipeline, _, fetcher, llm = _pipeline("keenable", [result])
-        pipeline._backend.max_content_length = 100
+        for engine_name in ("keenable", "webz"):
+            with self.subTest(engine=engine_name):
+                pipeline, _, fetcher, llm = _pipeline(engine_name, [result])
+                pipeline._backend.max_content_length = 100
+                answer = await pipeline.run("question", bot_name="Test bot")
+                self.assertEqual(answer, f"1. [{result.title}]({result.url})\n{snippet}")
+                fetcher.fetch_batch.assert_not_awaited()
+                llm.generate.assert_not_awaited()
+
+    async def test_webz_direct_output_preserves_publication_time_and_timezone(self) -> None:
+        published_at = "2026-11-20T08:30:00+08:00"
+        result = _result(published_at=published_at)
+        pipeline, _, fetcher, llm = _pipeline("webz", [result])
         answer = await pipeline.run("question", bot_name="Test bot")
-        self.assertEqual(answer, f"1. [{result.title}]({result.url})\n{snippet}")
+        self.assertEqual(
+            answer, f"1. [{result.title}]({result.url})\n发布时间：{published_at}\n{result.content}"
+        )
         fetcher.fetch_batch.assert_not_awaited()
+        llm.generate.assert_not_awaited()
+
+    async def test_webz_http_results_reach_the_pipeline_with_full_text_and_date(self) -> None:
+        text = "Opening paragraph\n\n" + "News detail. " * 500 + "Final fact."
+        published_at = "2026-11-20T08:30:00+08:00"
+        row = {
+            "article": {"title": "News", "url": "https://example.com/news", "published_at": published_at},
+            "chunk": {"text": text},
+        }
+        response = MagicMock(status=200)
+        response.text = AsyncMock(return_value=json.dumps({"results": [row]}))
+        request = MagicMock()
+        request.__aenter__ = AsyncMock(return_value=response)
+        session = MagicMock()
+        session.post.return_value = request
+        session_context = MagicMock()
+        session_context.__aenter__ = AsyncMock(return_value=session)
+        backend = SearchBackendSection(
+            default_engine="webz", max_results=1, max_content_length=30, fetch_content=True
+        )
+        options = {f"{name}_enabled": name == "webz" for name in _ENGINE_NAMES}
+        chain = EngineChain(EnginesSection(**options, webz_api_keys=["fixture-only-token"]), backend)
+        fetcher = SimpleNamespace(fetch_batch=AsyncMock(), integrate_inline_content=Mock())
+        llm = SimpleNamespace(generate=AsyncMock())
+        pipeline = SearchPipeline(
+            backend_cfg=backend, engine_chain=chain, content_fetcher=fetcher, llm_runner=llm
+        )
+        with patch("aiohttp.ClientSession", return_value=session_context):
+            answer = await pipeline.run("recent news", bot_name="Test bot")
+        self.assertEqual(answer, f"1. [News](https://example.com/news)\n发布时间：{published_at}\n{text}")
+        self.assertEqual(session.post.call_count, 1)
+        self.assertEqual(session.post.call_args.kwargs["json"]["k"], 1)
+        fetcher.fetch_batch.assert_not_awaited()
+        fetcher.integrate_inline_content.assert_not_called()
         llm.generate.assert_not_awaited()
 
     async def test_deepseek_summary_still_returns_directly_with_external_references(self) -> None:
@@ -201,6 +250,7 @@ class NewEngineFallbackTests(unittest.IsolatedAsyncioTestCase):
         values.update(
             exa_api_keys=list(exa_keys),
             tavily_api_keys=["fake-tavily-key"],
+            webz_api_keys=["fake-webz-key"],
             deepseek_api_keys=["fake-deepseek-key"],
             you_api_keys=["fake-you-key"],
         )
@@ -210,7 +260,7 @@ class NewEngineFallbackTests(unittest.IsolatedAsyncioTestCase):
         return chain
 
     async def test_new_default_engine_runs_first_and_success_stops_fallback(self) -> None:
-        for default in ("anysearch", "exa", "keenable"):
+        for default in ("anysearch", "exa", "keenable", "webz"):
             with self.subTest(default=default):
                 chain = self.make_chain(default=default, enabled=_ENGINE_NAMES)
                 results = [_result()]

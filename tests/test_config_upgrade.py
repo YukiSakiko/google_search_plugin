@@ -37,6 +37,17 @@ _NEW_ENGINE_DEFAULTS = {
     "exa_search_type": "auto",
 }
 
+_WEBZ_DEFAULTS = {
+    "webz_enabled": False,
+    "webz_api_keys": [],
+    "webz_days": 30,
+    "webz_language": "",
+    "webz_country": "",
+    "webz_sentiment": "auto",
+    "webz_domains": [],
+    "webz_tickers": [],
+}
+
 
 class RunnerConfigUpgradeTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -124,32 +135,47 @@ class RunnerConfigUpgradeTests(unittest.TestCase):
         )
 
     def test_430_upgrade_writes_keenable_defaults_and_keeps_existing_settings(self) -> None:
+        self.assert_engine_upgrade(
+            "4.1.1",
+            "4.3.0",
+            "exa",
+            {
+                "keenable_enabled": False,
+                "keenable_api_keys": [],
+                "keenable_published_after": "",
+                **_WEBZ_DEFAULTS,
+            },
+        )
+
+    def test_440_upgrade_writes_webz_defaults_and_keeps_existing_settings(self) -> None:
+        self.assert_engine_upgrade("4.2.2", "4.4.0", "keenable", _WEBZ_DEFAULTS)
+
+    def assert_engine_upgrade(
+        self, old_version: str, old_config_version: str, default_engine: str, new_fields: dict
+    ) -> None:
         raw = self.plugin.build_default_config()
-        raw["plugin"].update(version="4.1.1", config_version="4.3.0", enabled=False)
+        current_metadata = raw["plugin"].copy()
+        raw["plugin"].update(version=old_version, config_version=old_config_version, enabled=False)
         engines = raw["engines"]
-        for field in tuple(engines):
-            if field.startswith("keenable_"):
-                del engines[field]
+        for field in new_fields:
+            del engines[field]
         engines.update(anysearch_enabled=False, exa_enabled=True)
-        providers = ("tavily", "anysearch", "exa", "you", "deepseek")
-        for provider in providers:
-            engines[f"{provider}_api_keys"] = [f"fixture-{provider}-1", f"fixture-{provider}-2"]
-        raw["search_backend"].update(default_engine="exa", max_results=23)
+        if "keenable_enabled" in engines:
+            engines.update(keenable_enabled=True, keenable_published_after="7d")
+        for field in engines:
+            if field.endswith("_api_keys"):
+                engines[field] = [f"fixture-{field}-1", f"fixture-{field}-2"]
+        raw["search_backend"].update(default_engine=default_engine, max_results=23)
         self.write_fixture(raw)
 
         normalized = self.runner._apply_plugin_config(self.meta)
         persisted = self.read_persisted_config()
         self.assertEqual(persisted, normalized)
-        self.assertEqual(persisted["plugin"]["config_version"], "4.4.0")
-        self.assertEqual(persisted["plugin"]["version"], "4.2.2")
+        self.assertEqual(persisted["plugin"]["config_version"], current_metadata["config_version"])
+        self.assertEqual(persisted["plugin"]["version"], current_metadata["version"])
         self.assertFalse(persisted["plugin"]["enabled"])
         self.assertEqual(persisted["search_backend"], raw["search_backend"])
-        expected_engines = {
-            **engines,
-            "keenable_enabled": False,
-            "keenable_api_keys": [],
-            "keenable_published_after": "",
-        }
+        expected_engines = {**engines, **new_fields}
         for field, value in expected_engines.items():
             with self.subTest(field=field):
                 self.assertEqual(persisted["engines"][field], value)

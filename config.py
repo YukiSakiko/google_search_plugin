@@ -16,7 +16,7 @@ from maibot_sdk import Field, PluginConfigBase
 # Sections
 # ---------------------------------------------------------------------------
 
-PLUGIN_VERSION = "4.2.2"
+PLUGIN_VERSION = "4.2.3"
 
 
 class PluginSection(PluginConfigBase):
@@ -28,7 +28,7 @@ class PluginSection(PluginConfigBase):
 
     name: str = Field(default="google_search", description="插件名称")
     version: str = Field(default=PLUGIN_VERSION, description="插件版本")
-    config_version: str = Field(default="4.4.0", description="配置版本(Runner 用于兼容性校验)")
+    config_version: str = Field(default="4.5.0", description="配置版本(Runner 用于兼容性校验)")
     enabled: bool = Field(default=True, description="是否启用插件")
 
     @field_validator("version")
@@ -194,7 +194,7 @@ class EnginesSection(PluginConfigBase):
         le=30,
         description="只返回最近多少天内发布的新闻，0 表示当天，最大 30",
     )
-    webz_language: str = Field(default="", description="文章语言，例如 english；留空不限")
+    webz_language: str = Field(default="", description="文章语言，例如 english；留空时，Webz.io 可能根据搜索内容自动选择语言")
     webz_country: str = Field(default="", description="来源国家的两字母代码，例如 US 或 CN；留空不限")
     webz_sentiment: Literal["auto", "positive", "negative", "neutral"] = Field(
         default="auto",

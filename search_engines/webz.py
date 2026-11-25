@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -17,6 +18,8 @@ _MAX_K = 100
 _MAX_DAYS = 30
 _TOKEN_ENV_NAME = "WEBZ_API_TOKEN"
 _SENTIMENTS = frozenset({"positive", "negative", "neutral"})
+# Credentials, credits, access rights and rate limits can differ between tokens.
+_TOKEN_SCOPED_STATUSES = frozenset({401, 402, 403, 429})
 
 
 class WebzEngine(BaseSearchEngine, ApiKeyMixin):
@@ -56,53 +59,35 @@ class WebzEngine(BaseSearchEngine, ApiKeyMixin):
             return []
 
         payload = self._build_payload(normalized, num_results)
-        timeout = aiohttp.ClientTimeout(total=self.TIMEOUT)
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            for api_key in tokens:
-                request_headers = dict(headers)
-                request_headers["Authorization"] = f"Bearer {api_key}"
-                try:
+        # All credentials share this deadline; aiohttp must not start a second timer.
+        deadline = self.TIMEOUT if self.TIMEOUT > 0 else None
+        try:
+            async with (
+                asyncio.timeout(deadline),
+                aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None)) as session,
+            ):
+                for api_key in tokens:
+                    headers = {"Accept": "application/json", "Authorization": f"Bearer {api_key}"}
                     async with session.post(
                         endpoint,
                         json=payload,
-                        headers=request_headers,
+                        headers=headers,
                         proxy=self.proxy,
                         allow_redirects=False,
                     ) as response:
-                        response_text = await response.text()
-                        if response.status >= 400:
+                        if not 200 <= response.status < 300:
                             logger.error(
                                 "Webz search request failed with status %s for key %s.",
                                 response.status,
                                 mask_api_key(api_key),
                             )
-                            continue
-                        if not response_text:
-                            logger.error("Webz returned an empty response for key %s.", mask_api_key(api_key))
-                            continue
-                        try:
-                            data = json.loads(response_text)
-                        except json.JSONDecodeError:
-                            logger.error(
-                                "Failed to parse Webz response as JSON for key %s.",
-                                mask_api_key(api_key),
-                            )
-                            continue
-                except Exception as exc:
-                    logger.error(
-                        "Webz search raised an exception for key %s: %s",
-                        mask_api_key(api_key),
-                        type(exc).__name__,
-                    )
-                    continue
-
-                return self._parse_results(data, payload["k"])
-
+                            if response.status in _TOKEN_SCOPED_STATUSES:
+                                continue
+                            return []
+                        data = json.loads(await response.text())
+                        return self._parse_results(data, payload["k"])
+        except (aiohttp.ClientError, OSError, ValueError) as exc:
+            logger.error("Webz search failed: %s", type(exc).__name__)
         return []
 
     def has_api_keys(self) -> bool:
@@ -173,6 +158,7 @@ class WebzEngine(BaseSearchEngine, ApiKeyMixin):
                 continue
             raw_title = article.get("title")
             title = self.tidy_text(raw_title) if isinstance(raw_title, str) else ""
+            raw_date = article.get("published_at")
             chunk = item.get("chunk") if isinstance(item.get("chunk"), dict) else {}
             raw_text = chunk.get("text") if isinstance(chunk.get("text"), str) else ""
             if not raw_text.strip() and isinstance(article.get("summary"), str):
@@ -183,10 +169,11 @@ class WebzEngine(BaseSearchEngine, ApiKeyMixin):
                 SearchResult(
                     title=title or url,
                     url=url,
-                    snippet=self.tidy_text(content),
-                    abstract=self.tidy_text(content),
+                    snippet=content,
+                    abstract=content,
                     rank=len(results),
                     content=content,
+                    published_at=raw_date.strip() if isinstance(raw_date, str) else "",
                 )
             )
             if len(results) == limit:

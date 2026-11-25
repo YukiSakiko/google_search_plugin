@@ -134,6 +134,15 @@ class ConfigUiSchemaTests(unittest.TestCase):
         self.assertIn("50", count_hint)
         self.assertIn("完整片段", count_hint)
 
+    def test_webz_result_limit_and_language_help(self) -> None:
+        search_fields = self.ui["sections"]["search"]["fields"]
+        self.assertIn("Webz.io 最多返回 100 条", search_fields["max_results"]["hint"])
+        self.assertIn("完整片段", search_fields["max_results"]["hint"])
+        length_hint = self.ui["sections"]["fetch_advanced"]["fields"]["max_content_length"]["hint"]
+        self.assertNotIn("Webz", length_hint)
+        language_hint = self.ui["sections"]["webz_advanced"]["fields"]["webz_language"]["hint"]
+        self.assertIn("自动选择语言", language_hint)
+
     def test_cookie_uses_password_input_and_only_plugin_metadata_is_read_only(self) -> None:
         expected_secrets = {("search_backend", "zhihu_cookies"), ("reverse_image", "google_lens_cookies")}
         password_fields = {
